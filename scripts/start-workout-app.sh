@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/Users/dmitrijsibanov/Desktop/My_projects/Training analyzer/workout-app"
+PROJECT_DIR="/Users/dmitrijsibanov/Desktop/My_projects/RunForm"
 APP_URL="http://localhost:3000"
 OLLAMA_URL="http://localhost:11434/api/tags"
 BUILD_MARKER="$PROJECT_DIR/.next/BUILD_ID"
@@ -41,7 +41,7 @@ is_app_ready() {
 }
 
 listener_pid() {
-  lsof -tiTCP:3000 -sTCP:LISTEN 2>/dev/null | head -n 1
+  lsof -tiTCP:3000 -sTCP:LISTEN 2>/dev/null | head -n 1 || true
 }
 
 ensure_build() {

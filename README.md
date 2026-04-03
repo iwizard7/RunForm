@@ -177,12 +177,12 @@ The app expects workout JSON with fields such as:
 
 Parsing logic lives in:
 
-- [src/lib/parser.ts](/Users/dmitrijsibanov/Desktop/My_projects/Training analyzer/workout-app/src/lib/parser.ts)
+- [src/lib/parser.ts](/Users/dmitrijsibanov/Desktop/My_projects/RunForm/src/lib/parser.ts)
 
 Database persistence lives in:
 
-- [src/lib/db.ts](/Users/dmitrijsibanov/Desktop/My_projects/Training analyzer/workout-app/src/lib/db.ts)
-- [src/lib/actions.ts](/Users/dmitrijsibanov/Desktop/My_projects/Training analyzer/workout-app/src/lib/actions.ts)
+- [src/lib/db.ts](/Users/dmitrijsibanov/Desktop/My_projects/RunForm/src/lib/db.ts)
+- [src/lib/actions.ts](/Users/dmitrijsibanov/Desktop/My_projects/RunForm/src/lib/actions.ts)
 
 ## Available Scripts
 
@@ -228,7 +228,7 @@ Runs ESLint.
 
 Core analysis logic is implemented in:
 
-- [src/lib/ai.ts](/Users/dmitrijsibanov/Desktop/My_projects/Training analyzer/workout-app/src/lib/ai.ts)
+- [src/lib/ai.ts](/Users/dmitrijsibanov/Desktop/My_projects/RunForm/src/lib/ai.ts)
 
 This module powers:
 
@@ -244,7 +244,7 @@ This module powers:
 
 The direct Ollama integration is here:
 
-- [src/lib/ollama.ts](/Users/dmitrijsibanov/Desktop/My_projects/Training analyzer/workout-app/src/lib/ollama.ts)
+- [src/lib/ollama.ts](/Users/dmitrijsibanov/Desktop/My_projects/RunForm/src/lib/ollama.ts)
 
 ## Tauri Status
 
@@ -257,7 +257,7 @@ If you want to evolve the desktop build later, the Tauri scaffolding is already 
 
 High-level roadmap items are tracked in:
 
-- [TODO.md](/Users/dmitrijsibanov/Desktop/My_projects/Training analyzer/workout-app/TODO.md)
+- [TODO.md](/Users/dmitrijsibanov/Desktop/My_projects/RunForm/TODO.md)
 
 Near-term items currently listed there include:
 
