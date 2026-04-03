@@ -3,15 +3,18 @@ export async function requestOllama(params: {
   prompt: string;
   model?: string;
 }) {
-  const response = await fetch('http://localhost:11434/api/generate', {
+  const response = await fetch('/api/ollama', {
     method: 'POST',
-    body: JSON.stringify({
-      model: params.model ?? 'qwen2.5:3b',
-      prompt: params.prompt,
-      system: params.system,
-      stream: false,
-    }),
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params),
   });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Ollama request failed');
+  }
 
   return response.json() as Promise<{ response: string }>;
 }

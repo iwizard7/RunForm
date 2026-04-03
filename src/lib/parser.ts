@@ -13,9 +13,9 @@ export interface WorkoutData {
   activityName: string;
   startDate: string;
   endDate: string;
-  duration: number; // in seconds
+  duration: number;
   calories: number;
-  distance: number; // in km
+  distance: number;
   pace: string;
   averageIntensity: number;
   minIntensity: number;
@@ -87,9 +87,9 @@ interface RawWorkoutData {
 
 export function parseWorkoutJSON(json: RawWorkoutData): WorkoutData {
   return {
-    uuid: json.uuid || Math.random().toString(36).substring(7),
-    name: json.name || "Workout",
-    activityName: json.activity?.name || json.name || "Workout",
+    uuid: json.uuid || crypto.randomUUID(),
+    name: json.name || 'Workout',
+    activityName: json.activity?.name || json.name || 'Workout',
     startDate: json.startDate || new Date().toISOString(),
     endDate: json.endDate || json.startDate || new Date().toISOString(),
     duration: json.duration?.value || 0,
@@ -106,18 +106,18 @@ export function parseWorkoutJSON(json: RawWorkoutData): WorkoutData {
     zones: json.zones || {},
     cadence: json.cadence?.value || 0,
     steps: json.step?.value || 0,
-    location: json.location || "Unknown",
-    source: json.source || "Unknown",
+    location: json.location || 'Unknown',
+    source: json.source || 'Unknown',
     weather: {
-      temperature: json.weather?.temperature || "N/A",
-      humidity: json.weather?.humidity || "N/A"
+      temperature: json.weather?.temperature || 'N/A',
+      humidity: json.weather?.humidity || 'N/A',
     },
     device: {
-      name: json.device?.name || "Unknown",
-      manufacturer: json.device?.manufacturer || "Unknown",
-      model: json.device?.model || "Unknown",
-      hardwareVersion: json.device?.hardwareVersion || "Unknown",
-      softwareVersion: json.device?.softwareVersion || "Unknown"
-    }
+      name: json.device?.name || 'Unknown',
+      manufacturer: json.device?.manufacturer || 'Unknown',
+      model: json.device?.model || 'Unknown',
+      hardwareVersion: json.device?.hardwareVersion || 'Unknown',
+      softwareVersion: json.device?.softwareVersion || 'Unknown',
+    },
   };
 }
