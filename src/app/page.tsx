@@ -57,6 +57,7 @@ import { AiCoachDashboard } from '@/components/ai/AiCoachDashboard';
 import { NextWorkoutInsights } from '@/components/ai/NextWorkoutInsights';
 import { ShareCardModal } from '@/components/share/ShareCardModal';
 import { ComparisonRow, DetailRow, MetricLabel, SidebarItem } from '@/components/ui/AppPrimitives';
+import pkg from '../../package.json';
 
 export default function Home() {
   const {
@@ -257,7 +258,7 @@ export default function Home() {
               objectFit: 'contain'
             }}
           />
-          <p className="secondary-text" style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '10px' }}>v1.0.0 Alpha</p>
+          <p className="secondary-text" style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '10px' }}>v{pkg.version} Alpha</p>
         </div>
 
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1994,7 +1995,7 @@ export default function Home() {
                     <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Приложение' : 'App'}</h3>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span>{lang === 'ru' ? 'Версия' : 'Version'}</span>
-                        <span className="secondary-text">1.0.0 Alpha</span>
+                        <span className="secondary-text">v{pkg.version} Alpha</span>
                     </div>
                 </div>
                 <button 
