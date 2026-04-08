@@ -43,6 +43,8 @@ type SmartWorkoutLabel = {
   bg: string;
 };
 
+import { defaultPreferences, UserPreferences } from '@/lib/ai';
+
 type HomeMetricsParams = {
   workout: WorkoutData | null;
   history: WorkoutData[];
@@ -50,6 +52,7 @@ type HomeMetricsParams = {
   currentMonth: Date;
   selectedDateKey: string | null;
   selectedWorkouts: WorkoutData[];
+  preferences?: UserPreferences;
 };
 
 export function formatTime(seconds: number) {
@@ -66,7 +69,7 @@ export function getDateKey(date: Date) {
 }
 
 export function buildHomeMetrics(params: HomeMetricsParams) {
-  const { workout, history, lang, currentMonth, selectedDateKey, selectedWorkouts } = params;
+  const { workout, history, lang, currentMonth, selectedDateKey, selectedWorkouts, preferences = defaultPreferences } = params;
   const t = translations[lang];
 
   const getTranslatedZone = (name: string) => {
@@ -394,12 +397,12 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
     return flags;
   })();
 
-  const currentIntensityScore = workout ? getIntensityScore(workout) : 0;
+  const currentIntensityScore = workout ? getIntensityScore(workout, preferences) : 0;
   const avgIntensityScore = history.length > 0
-    ? Math.round(history.reduce((sum, item) => sum + getIntensityScore(item), 0) / history.length)
+    ? Math.round(history.reduce((sum, item) => sum + getIntensityScore(item, preferences), 0) / history.length)
     : 0;
   const peakIntensityWorkout = history.length > 0
-    ? history.reduce((best, item) => (getIntensityScore(item) > getIntensityScore(best) ? item : best))
+    ? history.reduce((best, item) => (getIntensityScore(item, preferences) > getIntensityScore(best, preferences) ? item : best))
     : null;
 
   const currentEfficiency = workout ? getEfficiencyMetrics(workout) : null;
@@ -408,7 +411,7 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
     : null;
 
   const currentWarmup = workout ? getWarmupAnalysis(workout, lang) : null;
-  const currentZoneProfile = workout ? getZoneProfile(workout, lang) : null;
+  const currentZoneProfile = workout ? getZoneProfile(workout, lang, preferences) : null;
 
   const weatherImpact = (() => {
     if (!workout) return null;
@@ -495,9 +498,9 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
 
   const getSmartWorkoutLabels = (item: WorkoutData): SmartWorkoutLabel[] => {
     const labels: SmartWorkoutLabel[] = [];
-    const zoneProfile = getZoneProfile(item, lang);
+    const zoneProfile = getZoneProfile(item, lang, preferences);
     const efficiency = getEfficiencyMetrics(item);
-    const intensity = getIntensityScore(item);
+    const intensity = getIntensityScore(item, preferences);
     const weatherStress = getWeatherStress(item.weather).stress;
 
     if (zoneProfile.label.includes('Recovery')) {
@@ -537,7 +540,7 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
       date.setDate(start.getDate() + index);
       const key = getDateKey(date);
       const entries = workoutsByDay[key] || [];
-      const load = entries.reduce((sum, item) => sum + item.distance * 12 + Math.max(0, item.avgHeartRate - 110) * 0.6 + getIntensityScore(item) * 0.22, 0);
+      const load = entries.reduce((sum, item) => sum + item.distance * 12 + Math.max(0, item.avgHeartRate - 110) * 0.6 + getIntensityScore(item, preferences) * 0.22, 0);
       let level = 0;
       if (load >= 110) level = 4;
       else if (load >= 75) level = 3;
@@ -563,15 +566,15 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
     },
     {
       title: lang === 'ru' ? '3 аэробные тренировки за неделю' : '3 aerobic sessions per week',
-      current: `${currentWeekEntries.filter((item) => getZoneProfile(item, lang).label.includes('Aerobic')).length} / 3`,
-      progress: Math.min(100, Math.round((currentWeekEntries.filter((item) => getZoneProfile(item, lang).label.includes('Aerobic')).length / 3) * 100)),
+      current: `${currentWeekEntries.filter((item) => getZoneProfile(item, lang, preferences).label.includes('Aerobic')).length} / 3`,
+      progress: Math.min(100, Math.round((currentWeekEntries.filter((item) => getZoneProfile(item, lang, preferences).label.includes('Aerobic')).length / 3) * 100)),
       color: '#34c759',
       note: lang === 'ru' ? 'Полезно для базы и жиросжигания.' : 'Useful for base building and fat loss.',
     },
     {
       title: lang === 'ru' ? '2 восстановительных дня в неделю' : '2 recovery days per week',
-      current: `${currentWeekEntries.filter((item) => getZoneProfile(item, lang).label.includes('Recovery')).length} / 2`,
-      progress: Math.min(100, Math.round((currentWeekEntries.filter((item) => getZoneProfile(item, lang).label.includes('Recovery')).length / 2) * 100)),
+      current: `${currentWeekEntries.filter((item) => getZoneProfile(item, lang, preferences).label.includes('Recovery')).length} / 2`,
+      progress: Math.min(100, Math.round((currentWeekEntries.filter((item) => getZoneProfile(item, lang, preferences).label.includes('Recovery')).length / 2) * 100)),
       color: '#57a6ff',
       note: lang === 'ru' ? 'Балансирует нагрузку и восстановление.' : 'Balances training stress and recovery.',
     },

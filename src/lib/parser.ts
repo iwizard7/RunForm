@@ -25,6 +25,8 @@ export interface WorkoutData {
   minHeartRate: number;
   maxHeartRate: number;
   zones: Record<string, WorkoutZone>;
+  paceZones?: Record<string, WorkoutZone>;
+  hrv?: number;
   cadence: number;
   steps: number;
   location: string;
@@ -69,6 +71,7 @@ interface RawWorkoutData {
   maxHeartRate?: WorkoutMetric<number>;
   cadence?: WorkoutMetric<number>;
   step?: WorkoutMetric<number>;
+  hrv?: WorkoutMetric<number>;
   location?: string;
   source?: string;
   weather?: {
@@ -76,6 +79,7 @@ interface RawWorkoutData {
     humidity?: string;
   };
   zones?: Record<string, WorkoutZone>;
+  paceZones?: Record<string, WorkoutZone>;
   device?: {
     name?: string;
     manufacturer?: string;
@@ -104,6 +108,8 @@ export function parseWorkoutJSON(json: RawWorkoutData): WorkoutData {
     minHeartRate: json.minHeartRate?.value || 0,
     maxHeartRate: json.maxHeartRate?.value || 0,
     zones: json.zones || {},
+    paceZones: json.paceZones || {},
+    hrv: json.hrv?.value,
     cadence: json.cadence?.value || 0,
     steps: json.step?.value || 0,
     location: json.location || 'Unknown',

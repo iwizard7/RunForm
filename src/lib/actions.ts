@@ -20,6 +20,7 @@ interface WorkoutRow {
   avg_hr: number;
   min_hr: number;
   max_hr: number;
+  hrv?: number;
   cadence: number;
   steps: number;
   location: string;
@@ -27,6 +28,7 @@ interface WorkoutRow {
   weather_temp: string;
   weather_hum: string;
   zones_json: string;
+  pace_zones_json?: string;
   device_name: string;
   device_manufacturer: string;
   device_model: string;
@@ -69,6 +71,7 @@ function mapRowToWorkout(row: Partial<WorkoutRow> & Pick<WorkoutRow, 'uuid' | 'n
     avgHeartRate: row.avg_hr ?? 0,
     minHeartRate: row.min_hr ?? 0,
     maxHeartRate: row.max_hr ?? 0,
+    hrv: row.hrv,
     cadence: row.cadence ?? 0,
     steps: row.steps ?? 0,
     location: row.location ?? 'Unknown',
@@ -78,6 +81,7 @@ function mapRowToWorkout(row: Partial<WorkoutRow> & Pick<WorkoutRow, 'uuid' | 'n
       humidity: row.weather_hum ?? 'N/A',
     },
     zones: parseZones(row.zones_json),
+    paceZones: parseZones(row.pace_zones_json),
     device: {
       name: row.device_name ?? 'Unknown',
       manufacturer: row.device_manufacturer ?? 'Unknown',
@@ -92,11 +96,11 @@ const insertWorkoutStatement = db.prepare(`
   INSERT OR REPLACE INTO workouts (
     uuid, name, activity_name, activity_type, start_date, end_date,
     duration, calories, distance, pace, avg_intensity, min_intensity,
-    max_intensity, average_mets, avg_hr, min_hr, max_hr, cadence,
-    steps, location, source, weather_temp, weather_hum, zones_json,
+    max_intensity, average_mets, avg_hr, min_hr, max_hr, hrv, cadence,
+    steps, location, source, weather_temp, weather_hum, zones_json, pace_zones_json,
     device_name, device_manufacturer, device_model, device_hw_version, device_sw_version
   ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   )
 `);
 
@@ -123,6 +127,7 @@ export async function saveWorkout(data: WorkoutData) {
     data.avgHeartRate,
     data.minHeartRate,
     data.maxHeartRate,
+    data.hrv ?? null,
     data.cadence,
     data.steps,
     data.location,
@@ -130,6 +135,7 @@ export async function saveWorkout(data: WorkoutData) {
     data.weather.temperature,
     data.weather.humidity,
     JSON.stringify(data.zones),
+    JSON.stringify(data.paceZones || {}),
     data.device.name,
     data.device.manufacturer,
     data.device.model,

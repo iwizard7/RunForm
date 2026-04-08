@@ -23,6 +23,9 @@ The app is designed for personal use on a local machine:
 
 - Latest workout dashboard with core stats
 - Heart-rate zone breakdown and effort profile
+- Pace-based training zones
+- Heart Rate Variability (HRV) readiness integration
+- Custom personalized Heart Rate Zones and Threshold Pace configuration
 - Weekly load and recovery summary
 - Health and training red flags
 - AI explanation of workout quality
@@ -171,7 +174,8 @@ The app expects workout JSON with fields such as:
 - average METs
 - average, min, and max heart rate
 - cadence and step count
-- heart-rate zones
+- heart-rate zones and pace zones
+- heart rate variability (HRV)
 - weather metadata
 - device metadata
 

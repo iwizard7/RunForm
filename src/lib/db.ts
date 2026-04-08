@@ -100,4 +100,16 @@ applyMigration(3, () => {
   db.exec('CREATE INDEX IF NOT EXISTS idx_workouts_created_at ON workouts(created_at DESC)');
 });
 
+applyMigration(4, () => {
+  const existingColumns = db.prepare('PRAGMA table_info(workouts)').all() as Array<{ name: string }>;
+  const existingColumnNames = new Set(existingColumns.map((column) => column.name));
+
+  if (!existingColumnNames.has('hrv')) {
+    db.exec('ALTER TABLE workouts ADD COLUMN hrv INTEGER');
+  }
+  if (!existingColumnNames.has('pace_zones_json')) {
+    db.exec('ALTER TABLE workouts ADD COLUMN pace_zones_json TEXT');
+  }
+});
+
 export default db;

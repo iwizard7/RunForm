@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getDashboardData, saveWorkout, clearAllWorkouts } from '@/lib/actions';
 import { parseWorkoutJSON, WorkoutData } from '@/lib/parser';
+import { defaultPreferences, UserPreferences } from '@/lib/ai';
 
 const emptySubscribe = () => () => {};
 
@@ -15,6 +16,22 @@ export function useWorkoutData() {
     }
     return window.localStorage.getItem('runform.profileName') || 'Athlete';
   });
+  
+  const [preferences, setPreferences] = useState<UserPreferences>(() => {
+    if (typeof window === 'undefined') {
+      return defaultPreferences;
+    }
+    const saved = window.localStorage.getItem('runform.preferences');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return defaultPreferences;
+      }
+    }
+    return defaultPreferences;
+  });
+
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -69,6 +86,13 @@ export function useWorkoutData() {
     window.localStorage.setItem('runform.profileName', profileName.trim() || 'Athlete');
   }, [isClient, profileName]);
 
+  useEffect(() => {
+    if (!isClient) {
+      return;
+    }
+    window.localStorage.setItem('runform.preferences', JSON.stringify(preferences));
+  }, [isClient, preferences]);
+
   return {
     workout,
     setWorkout,
@@ -76,6 +100,8 @@ export function useWorkoutData() {
     isClient,
     profileName,
     setProfileName,
+    preferences,
+    setPreferences,
     currentMonth,
     setCurrentMonth,
     selectedDateKey,

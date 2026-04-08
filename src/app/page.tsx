@@ -70,6 +70,8 @@ export default function Home() {
     setCurrentMonth,
     selectedDateKey,
     setSelectedDateKey,
+    preferences,
+    setPreferences,
     importWorkoutFile,
     resetWorkouts,
   } = useWorkoutData();
@@ -165,6 +167,7 @@ export default function Home() {
     currentMonth,
     selectedDateKey,
     selectedWorkouts,
+    preferences,
   });
 
   const {
@@ -1930,6 +1933,62 @@ export default function Home() {
                     <p className="secondary-text" style={{ marginTop: '10px' }}>
                       {lang === 'ru' ? 'Имя сохраняется локально на этом устройстве.' : 'The name is stored locally on this device.'}
                     </p>
+                </div>
+                <div className="premium-card">
+                    <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Персонализация зон' : 'Zone Personalization'}</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                      {(['z1', 'z2', 'z3', 'z4', 'z5'] as const).map((zone, idx) => (
+                        <div key={zone}>
+                          <label className="secondary-text" style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem' }}>
+                            {lang === 'ru' ? `Зона ${idx + 1} (мин. пульс)` : `Zone ${idx + 1} (min HR)`}
+                          </label>
+                          <input
+                            type="number"
+                            value={preferences.hrZones[zone]}
+                            onChange={(e) => setPreferences({
+                              ...preferences,
+                              hrZones: { ...preferences.hrZones, [zone]: parseInt(e.target.value) || 0 }
+                            })}
+                            style={{
+                              width: '100%',
+                              padding: '12px 14px',
+                              borderRadius: '10px',
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              background: 'rgba(255,255,255,0.04)',
+                              color: '#f5f7fb',
+                              fontSize: '0.95rem',
+                              outline: 'none'
+                            }}
+                          />
+                        </div>
+                      ))}
+                      <div>
+                        <label className="secondary-text" style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem' }}>
+                          {lang === 'ru' ? 'Пороговый темп (сек/км)' : 'Threshold Pace (sec/km)'}
+                        </label>
+                        <input
+                          type="number"
+                          value={preferences.thresholdPace}
+                          onChange={(e) => setPreferences({
+                            ...preferences,
+                            thresholdPace: parseInt(e.target.value) || 0
+                          })}
+                          style={{
+                            width: '100%',
+                            padding: '12px 14px',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            background: 'rgba(255,255,255,0.04)',
+                            color: '#f5f7fb',
+                            fontSize: '0.95rem',
+                            outline: 'none'
+                          }}
+                        />
+                        <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '6px' }}>
+                           {lang === 'ru' ? 'Например: 300 для темпа 5:00/км' : 'Example: 300 for 5:00/km pace'}
+                        </p>
+                      </div>
+                    </div>
                 </div>
                 <div className="premium-card">
                     <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Приложение' : 'App'}</h3>
