@@ -40,10 +40,19 @@ export function useWorkoutData() {
   const hasInitializedCalendar = useRef(false);
   const isClient = useSyncExternalStore(emptySubscribe, () => true, () => false);
 
+  const [shoes, setShoes] = useState<import('@/lib/actions').Shoe[]>([]);
+
+  const loadShoes = async () => {
+    const { getShoes } = await import('@/lib/actions');
+    const data = await getShoes();
+    setShoes(data);
+  };
+
   const refreshData = async () => {
     const data = await getDashboardData();
     setWorkout(data.latestWorkout);
     setHistory(data.history);
+    await loadShoes();
 
     if (!hasInitializedCalendar.current && data.history.length > 0) {
       const latestDate = new Date(data.history[0].startDate);
@@ -61,6 +70,18 @@ export function useWorkoutData() {
     const json = JSON.parse(text);
     const parsed = parseWorkoutJSON(json);
     await saveWorkout(parsed);
+    await refreshData();
+  };
+
+  const assignShoe = async (workoutId: string, shoeId: string | null) => {
+    const { assignShoeToWorkout } = await import('@/lib/actions');
+    await assignShoeToWorkout(workoutId, shoeId);
+    await refreshData();
+  };
+
+  const updateTags = async (workoutId: string, tags: string[]) => {
+    const { updateWorkoutTags } = await import('@/lib/actions');
+    await updateWorkoutTags(workoutId, tags);
     await refreshData();
   };
 
@@ -97,6 +118,8 @@ export function useWorkoutData() {
     workout,
     setWorkout,
     history,
+    shoes,
+    loadShoes,
     isClient,
     profileName,
     setProfileName,
@@ -108,6 +131,8 @@ export function useWorkoutData() {
     setSelectedDateKey,
     refreshData,
     importWorkoutFile,
+    assignShoe,
+    updateTags,
     resetWorkouts,
   };
 }

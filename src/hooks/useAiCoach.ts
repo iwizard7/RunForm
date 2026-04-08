@@ -66,12 +66,13 @@ export function useAiCoach(params: UseAiCoachParams) {
         maxHr: item.maxHeartRate,
         pace: item.pace,
         mets: item.averageMETs.toFixed(1),
+        hrv: item.hrv ?? 'N/A',
         intensity: getIntensityScore(item),
         zone: getZoneProfile(item, lang).label,
         location: item.location,
       }));
       const statsStr = lastWorkouts
-        .map((item) => `${item.date}: ${item.dist}km, avgHR:${item.avgHr}bpm, maxHR:${item.maxHr}bpm, pace:${item.pace}, METs:${item.mets}, intensity:${item.intensity}, zone:${item.zone}, location:${item.location}`)
+        .map((item) => `${item.date}: ${item.dist}km, avgHR:${item.avgHr}bpm, maxHR:${item.maxHr}bpm, pace:${item.pace}, METs:${item.mets}, HRV:${item.hrv}, intensity:${item.intensity}, zone:${item.zone}, location:${item.location}`)
         .join('\n');
 
       const goalContext = {
@@ -130,12 +131,13 @@ export function useAiCoach(params: UseAiCoachParams) {
         `Zone profile: ${currentZoneProfile?.label ?? 'Unknown'}`,
         `Running efficiency: ${currentEfficiency?.score ?? 0}`,
         `Warmup score: ${currentWarmup?.controlScore ?? 0}`,
+        `HRV (Readiness): ${workout.hrv ?? 'N/A'}`,
         `Weekly load: ${weeklyLoadLabel}`,
         `Recovery: ${weeklyRecoveryLabel}`,
         `Red flags: ${healthFlags.map((flag) => flag.title).join('; ') || 'none'}`,
       ].join(', ');
 
-      const systemPrompt = `You are a professional running coach. Analyze the workout with intensity, MET load, zones, recovery, and efficiency. Return a concise but useful review in ${lang === 'ru' ? 'Russian' : 'English'} with: 1) strongest point, 2) main risk, 3) one actionable recommendation, 4) whether the session fits endurance/fat-loss/speed goals.`;
+      const systemPrompt = `You are a professional running coach. Analyze the workout with intensity, MET load, zones, recovery, HRV readiness, and efficiency. Return a concise but useful review in ${lang === 'ru' ? 'Russian' : 'English'} with: 1) strongest point, 2) main risk, 3) one actionable recommendation, 4) whether the session fits endurance/fat-loss/speed goals.`;
 
       const data = await requestOllama({
         prompt: `Stats: ${stats}\nAdvice:`,

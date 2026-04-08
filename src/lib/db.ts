@@ -112,4 +112,32 @@ applyMigration(4, () => {
   }
 });
 
+applyMigration(5, () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS shoes (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      brand TEXT,
+      model TEXT,
+      max_distance REAL,
+      distance_run REAL DEFAULT 0,
+      is_active BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  const existingColumns = db.prepare('PRAGMA table_info(workouts)').all() as Array<{ name: string }>;
+  const existingColumnNames = new Set(existingColumns.map((column) => column.name));
+
+  if (!existingColumnNames.has('shoe_id')) {
+    db.exec('ALTER TABLE workouts ADD COLUMN shoe_id TEXT REFERENCES shoes(id)');
+  }
+  if (!existingColumnNames.has('tags_json')) {
+    db.exec('ALTER TABLE workouts ADD COLUMN tags_json TEXT');
+  }
+  if (!existingColumnNames.has('route_json')) {
+    db.exec('ALTER TABLE workouts ADD COLUMN route_json TEXT');
+  }
+});
+
 export default db;

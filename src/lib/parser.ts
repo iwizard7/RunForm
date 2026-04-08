@@ -42,6 +42,9 @@ export interface WorkoutData {
     hardwareVersion: string;
     softwareVersion: string;
   };
+  shoeId?: string;
+  tags?: string[];
+  route?: Array<{lat: number, lng: number, hr?: number}>;
 }
 
 interface WorkoutMetric<T> {

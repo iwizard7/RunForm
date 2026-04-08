@@ -30,6 +30,10 @@ import {
   Share2,
   Sparkles,
   Loader2,
+  Footprints,
+  Tag,
+  Plus,
+  X,
 } from 'lucide-react';
 import {
   PieChart,
@@ -64,6 +68,8 @@ export default function Home() {
     workout,
     setWorkout,
     history,
+    shoes,
+    loadShoes,
     isClient,
     profileName,
     setProfileName,
@@ -73,11 +79,16 @@ export default function Home() {
     setSelectedDateKey,
     preferences,
     setPreferences,
+    assignShoe,
+    updateTags,
     importWorkoutFile,
     resetWorkouts,
   } = useWorkoutData();
+
+  const [newShoe, setNewShoe] = useState({ name: '', brand: '', model: '', maxDistance: 800 });
   const [activeTab, setActiveTab] = useState('dashboard');
   const [lang, setLang] = useState<Language>('ru');
+  const [tagFilter, setTagFilter] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedWorkouts, setSelectedWorkouts] = useState<WorkoutData[]>([]);
@@ -317,6 +328,43 @@ export default function Home() {
                             .replace('{date}', new Date(workout.startDate).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'long' }))
                         }
                     </p>
+                    
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '16px' }}>
+                       <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', padding: '4px 12px' }}>
+                          <Footprints size={14} className="secondary-text" style={{ marginRight: '6px' }} />
+                          <select 
+                            value={workout.shoeId || ''} 
+                            onChange={(e) => assignShoe(workout.uuid, e.target.value || null)}
+                            style={{ background: 'transparent', color: '#fff', border: 'none', outline: 'none', fontSize: '0.85rem' }}
+                          >
+                            <option value="" style={{ color: '#000' }}>{lang === 'ru' ? 'Нет кроссовок' : 'No shoe selected'}</option>
+                            {shoes.map(s => (
+                               <option key={s.id} value={s.id} style={{ color: '#000' }}>{s.name}</option>
+                            ))}
+                          </select>
+                       </div>
+                       
+                       <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', padding: '4px 12px', gap: '6px' }}>
+                          <Tag size={14} className="secondary-text" />
+                          {(workout.tags || []).map((tag, idx) => (
+                             <span key={idx} style={{ background: 'rgba(0,122,255,0.2)', color: '#007aff', fontSize: '0.75rem', padding: '2px 6px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                               {tag}
+                               <X size={10} style={{ cursor: 'pointer' }} onClick={() => updateTags(workout.uuid, (workout.tags || []).filter(t => t !== tag))} />
+                             </span>
+                          ))}
+                          <input 
+                            placeholder={lang === 'ru' ? '+ Добавить тег' : '+ Add tag'}
+                            onKeyDown={(e) => {
+                               if (e.key === 'Enter' && e.currentTarget.value) {
+                                   const newTags = [...(workout.tags || []), e.currentTarget.value];
+                                   updateTags(workout.uuid, newTags);
+                                   e.currentTarget.value = '';
+                               }
+                            }}
+                            style={{ background: 'transparent', color: '#fff', border: 'none', outline: 'none', fontSize: '0.85rem', width: '100px' }}
+                          />
+                       </div>
+                    </div>
                   </div>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }} className="no-print">
                      <button onClick={() => setShowShareCard(true)} style={{ background: 'rgba(52, 199, 89, 0.1)', color: '#34c759', border: '1px solid rgba(52, 199, 89, 0.2)', padding: '10px 16px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
@@ -477,7 +525,17 @@ export default function Home() {
              )}
 
              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {history.map((w) => {
+                <input 
+                  placeholder={lang === 'ru' ? 'Поиск по тегу или названию...' : 'Filter by tag or name...'}
+                  value={tagFilter}
+                  onChange={(e) => setTagFilter(e.target.value)}
+                  style={{ padding: '12px 16px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', fontSize: '0.95rem', outline: 'none', marginBottom: '8px' }}
+                />
+                {history.filter(w => {
+                   if (!tagFilter) return true;
+                   const search = tagFilter.toLowerCase();
+                   return w.name.toLowerCase().includes(search) || (w.tags || []).some(t => t.toLowerCase().includes(search));
+                }).map((w) => {
                    const isSelected = selectedWorkouts.find(sw => sw.uuid === w.uuid);
                    return (
                     <div 
@@ -503,6 +561,12 @@ export default function Home() {
                              {getSmartWorkoutLabels(w).map((tag) => (
                                <span key={`${w.uuid}-${tag.label}`} style={{ padding: '5px 9px', borderRadius: '999px', background: tag.bg, color: tag.color, fontSize: '0.72rem', fontWeight: 700 }}>
                                  {tag.label}
+                               </span>
+                             ))}
+                             {(w.tags || []).map((tag, idx) => (
+                               <span key={`custom-${w.uuid}-${idx}`} style={{ padding: '5px 9px', borderRadius: '4px', background: 'rgba(0,122,255,0.2)', color: '#007aff', fontSize: '0.72rem', fontWeight: 600 }}>
+                                 <Tag size={10} style={{ marginRight: '4px' }} />
+                                 {tag}
                                </span>
                              ))}
                            </div>
@@ -1988,6 +2052,56 @@ export default function Home() {
                         <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '6px' }}>
                            {lang === 'ru' ? 'Например: 300 для темпа 5:00/км' : 'Example: 300 for 5:00/km pace'}
                         </p>
+                      </div>
+                    </div>
+                </div>
+                <div className="premium-card">
+                    <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Экипировка (Кроссовки)' : 'Equipment (Shoes)'}</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      {shoes.map(shoe => (
+                        <div key={shoe.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.04)', padding: '12px 16px', borderRadius: '12px', border: shoe.isActive ? '1px solid rgba(52, 199, 89, 0.3)' : '1px solid rgba(255,255,255,0.1)' }}>
+                           <div>
+                             <h4 style={{ margin: 0, fontSize: '1.05rem', color: shoe.isActive ? '#fff' : '#a0a0a0' }}>{shoe.name} <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>({shoe.brand} {shoe.model})</span></h4>
+                             <p className="secondary-text" style={{ margin: '4px 0 0', fontSize: '0.85rem' }}>
+                               {shoe.distanceRun.toFixed(1)} / {shoe.maxDistance} km 
+                               <span style={{ marginLeft: '12px', color: shoe.distanceRun > shoe.maxDistance ? '#ff2d55' : 'inherit' }}>
+                                 ({Math.round((shoe.distanceRun / shoe.maxDistance) * 100)}%)
+                               </span>
+                             </p>
+                           </div>
+                           <button onClick={async () => {
+                             const { toggleShoeActive } = await import('@/lib/actions');
+                             await toggleShoeActive(shoe.id, !shoe.isActive);
+                             await loadShoes();
+                           }} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', padding: '6px 12px', borderRadius: '8px', cursor: 'pointer' }}>
+                             {shoe.isActive ? (lang === 'ru' ? 'В архив' : 'Archive') : (lang === 'ru' ? 'Активировать' : 'Activate')}
+                           </button>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                        <input
+                          placeholder={lang === 'ru' ? 'Название (напр. Nike Peg)' : 'Name (e.g. Nike Peg)'}
+                          value={newShoe.name}
+                          onChange={(e) => setNewShoe({...newShoe, name: e.target.value})}
+                          style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', outline: 'none' }}
+                        />
+                        <input
+                          placeholder={lang === 'ru' ? 'Макс. км (800)' : 'Max km (800)'}
+                          type="number"
+                          value={newShoe.maxDistance}
+                          onChange={(e) => setNewShoe({...newShoe, maxDistance: parseInt(e.target.value)||800})}
+                          style={{ width: '100px', padding: '10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff', outline: 'none' }}
+                        />
+                        <button onClick={async () => {
+                          if (newShoe.name) {
+                            const { addShoe } = await import('@/lib/actions');
+                            await addShoe({ name: newShoe.name, brand: newShoe.brand, model: newShoe.model, maxDistance: newShoe.maxDistance });
+                            setNewShoe({ name: '', brand: '', model: '', maxDistance: 800 });
+                            await loadShoes();
+                          }
+                        }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#007aff', color: '#fff', border: 'none', padding: '0 16px', borderRadius: '8px', cursor: 'pointer' }}>
+                          <Plus size={18} />
+                        </button>
                       </div>
                     </div>
                 </div>

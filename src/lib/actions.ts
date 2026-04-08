@@ -34,6 +34,20 @@ interface WorkoutRow {
   device_model: string;
   device_hw_version: string;
   device_sw_version: string;
+  shoe_id?: string;
+  tags_json?: string;
+  route_json?: string;
+}
+
+export interface Shoe {
+  id: string;
+  name: string;
+  brand: string;
+  model: string;
+  maxDistance: number;
+  distanceRun: number;
+  isActive: boolean;
+  createdAt: string;
 }
 
 export type DashboardData = {
@@ -89,6 +103,9 @@ function mapRowToWorkout(row: Partial<WorkoutRow> & Pick<WorkoutRow, 'uuid' | 'n
       hardwareVersion: row.device_hw_version ?? 'Unknown',
       softwareVersion: row.device_sw_version ?? 'Unknown',
     },
+    shoeId: row.shoe_id,
+    tags: row.tags_json ? JSON.parse(row.tags_json) : [],
+    route: row.route_json ? JSON.parse(row.route_json) : [],
   };
 }
 
@@ -98,9 +115,10 @@ const insertWorkoutStatement = db.prepare(`
     duration, calories, distance, pace, avg_intensity, min_intensity,
     max_intensity, average_mets, avg_hr, min_hr, max_hr, hrv, cadence,
     steps, location, source, weather_temp, weather_hum, zones_json, pace_zones_json,
-    device_name, device_manufacturer, device_model, device_hw_version, device_sw_version
+    device_name, device_manufacturer, device_model, device_hw_version, device_sw_version,
+    shoe_id, tags_json, route_json
   ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   )
 `);
 
@@ -141,6 +159,9 @@ export async function saveWorkout(data: WorkoutData) {
     data.device.model,
     data.device.hardwareVersion,
     data.device.softwareVersion,
+    data.shoeId ?? null,
+    data.tags ? JSON.stringify(data.tags) : null,
+    data.route ? JSON.stringify(data.route) : null,
   );
 
   return { success: true };
@@ -167,5 +188,58 @@ export async function getDashboardData(): Promise<DashboardData> {
 
 export async function clearAllWorkouts() {
   deleteAllWorkoutsStatement.run();
+  return { success: true };
+}
+
+// === Equipment Tracker (Shoes) ===
+
+export async function getShoes(): Promise<Shoe[]> {
+  const rows = db.prepare('SELECT * FROM shoes ORDER BY created_at DESC').all() as any[];
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    brand: r.brand,
+    model: r.model,
+    maxDistance: r.max_distance,
+    distanceRun: r.distance_run,
+    isActive: Boolean(r.is_active),
+    createdAt: r.created_at
+  }));
+}
+
+export async function addShoe(data: Omit<Shoe, 'id' | 'distanceRun' | 'isActive' | 'createdAt'>) {
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO shoes (id, name, brand, model, max_distance)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, data.name, data.brand, data.model, data.maxDistance);
+  return { success: true, id };
+}
+
+export async function updateShoeDistance() {
+  // Recalculates distance for all shoes based on connected workouts
+  db.prepare(`
+    UPDATE shoes SET distance_run = (
+      SELECT COALESCE(SUM(distance), 0) FROM workouts WHERE shoe_id = shoes.id
+    )
+  `).run();
+  return { success: true };
+}
+
+export async function assignShoeToWorkout(workoutId: string, shoeId: string | null) {
+  db.prepare('UPDATE workouts SET shoe_id = ? WHERE uuid = ?').run(shoeId, workoutId);
+  await updateShoeDistance();
+  return { success: true };
+}
+
+export async function toggleShoeActive(shoeId: string, isActive: boolean) {
+  db.prepare('UPDATE shoes SET is_active = ? WHERE id = ?').run(isActive ? 1 : 0, shoeId);
+  return { success: true };
+}
+
+// === Tagging ===
+
+export async function updateWorkoutTags(workoutId: string, tags: string[]) {
+  db.prepare('UPDATE workouts SET tags_json = ? WHERE uuid = ?').run(JSON.stringify(tags), workoutId);
   return { success: true };
 }
