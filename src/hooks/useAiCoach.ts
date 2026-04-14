@@ -103,11 +103,17 @@ export function useAiCoach(params: UseAiCoachParams) {
       const raw = data.response as string;
       const jsonMatch = raw.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
-        setPlanPhases(JSON.parse(jsonMatch[0]) as WorkoutPhase[]);
+        try {
+          setPlanPhases(JSON.parse(jsonMatch[0]) as WorkoutPhase[]);
+        } catch (e) {
+          console.error('[RunForm] Failed to parse AI plan JSON:', e);
+          setAiPlan(raw);
+        }
       } else {
         setAiPlan(raw);
       }
-    } catch {
+    } catch (err) {
+      console.error('[RunForm] fetchAIPlan failed:', err);
       setAiPlan(lang === 'ru' ? '❌ Ollama не отвечает. Убедитесь, что сервис запущен.' : '❌ Ollama is not responding. Make sure the service is running.');
     } finally {
       setIsPlanLoading(false);

@@ -121,8 +121,8 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
         duration: Math.max(...history.map((item) => item.duration)),
         calories: Math.max(...history.map((item) => item.calories)),
         pace: history.reduce((prev, curr) => {
-          const prevMinutes = parseInt(prev.pace.split('′')[0], 10) || 999;
-          const currMinutes = parseInt(curr.pace.split('′')[0], 10) || 999;
+          const prevMinutes = parsePaceToMinutes(prev.pace) || 999;
+          const currMinutes = parsePaceToMinutes(curr.pace) || 999;
           return currMinutes < prevMinutes ? curr : prev;
         }),
       };
@@ -487,7 +487,9 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
   };
 
   const getWorkoutType = (item: WorkoutData): WorkoutTypeInfo => {
-    if (item.avgHeartRate >= 150 || item.pace.includes('7′') || item.pace.includes('6′')) {
+    const paceMinutes = parsePaceToMinutes(item.pace);
+
+    if (item.avgHeartRate >= 150 || (paceMinutes > 0 && paceMinutes <= 5.75)) {
       return { short: lang === 'ru' ? 'ИНТ' : 'INT', label: lang === 'ru' ? 'Интенсивная' : 'Intensity', color: '#ff2d55' };
     }
     if (item.distance >= 8 || item.duration >= 3600) {

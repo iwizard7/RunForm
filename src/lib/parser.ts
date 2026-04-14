@@ -45,6 +45,7 @@ export interface WorkoutData {
   shoeId?: string;
   tags?: string[];
   route?: Array<{lat: number, lng: number, hr?: number}>;
+  routeId?: string;
 }
 
 interface WorkoutMetric<T> {

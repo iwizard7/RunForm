@@ -66,6 +66,9 @@ start_app() {
   (
     for _ in {1..30}; do
       if is_app_ready; then
+        # Даём серверу дополнительные 1.5 сек на инициализацию Server Actions
+        # и подключение к БД, прежде чем браузер откроется и отправит запросы.
+        sleep 1.5
         open "$APP_URL"
         exit 0
       fi
@@ -74,6 +77,8 @@ start_app() {
     log "Приложение не поднялось на $APP_URL"
   ) &
 
+  # Явно передаём путь к БД — не зависит от рабочей директории процесса.
+  export RUNFORM_DATA_DIR="$PROJECT_DIR/data"
   npm run start
 }
 

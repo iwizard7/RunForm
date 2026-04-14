@@ -2,6 +2,7 @@
 
 import db from './db';
 import { WorkoutData } from './parser';
+import { parsePaceToMinutes } from './ai';
 
 interface WorkoutRow {
   uuid: string;
@@ -37,6 +38,7 @@ interface WorkoutRow {
   shoe_id?: string;
   tags_json?: string;
   route_json?: string;
+  route_id?: string;
 }
 
 export interface Shoe {
@@ -64,6 +66,18 @@ function parseZones(zonesJson: string | null | undefined): WorkoutData['zones'] 
     return JSON.parse(zonesJson) as WorkoutData['zones'];
   } catch {
     return {};
+  }
+}
+
+function parseJsonValue<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
   }
 }
 
@@ -104,8 +118,9 @@ function mapRowToWorkout(row: Partial<WorkoutRow> & Pick<WorkoutRow, 'uuid' | 'n
       softwareVersion: row.device_sw_version ?? 'Unknown',
     },
     shoeId: row.shoe_id,
-    tags: row.tags_json ? JSON.parse(row.tags_json) : [],
-    route: row.route_json ? JSON.parse(row.route_json) : [],
+    tags: parseJsonValue(row.tags_json, [] as string[]),
+    route: parseJsonValue(row.route_json, [] as NonNullable<WorkoutData['route']>),
+    routeId: row.route_id,
   };
 }
 
@@ -116,9 +131,9 @@ const insertWorkoutStatement = db.prepare(`
     max_intensity, average_mets, avg_hr, min_hr, max_hr, hrv, cadence,
     steps, location, source, weather_temp, weather_hum, zones_json, pace_zones_json,
     device_name, device_manufacturer, device_model, device_hw_version, device_sw_version,
-    shoe_id, tags_json, route_json
+    shoe_id, tags_json, route_json, route_id
   ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   )
 `);
 
@@ -162,8 +177,13 @@ export async function saveWorkout(data: WorkoutData) {
     data.shoeId ?? null,
     data.tags ? JSON.stringify(data.tags) : null,
     data.route ? JSON.stringify(data.route) : null,
+    data.routeId ?? null,
   );
 
+  await checkAndStorePBs(data);
+  if (data.route) {
+    await matchAndAssignRoute(data.uuid, JSON.stringify(data.route));
+  }
   return { success: true };
 }
 
@@ -188,6 +208,7 @@ export async function getDashboardData(): Promise<DashboardData> {
 
 export async function clearAllWorkouts() {
   deleteAllWorkoutsStatement.run();
+  await updateShoeDistance();
   return { success: true };
 }
 
@@ -242,4 +263,153 @@ export async function toggleShoeActive(shoeId: string, isActive: boolean) {
 export async function updateWorkoutTags(workoutId: string, tags: string[]) {
   db.prepare('UPDATE workouts SET tags_json = ? WHERE uuid = ?').run(JSON.stringify(tags), workoutId);
   return { success: true };
+}
+
+// === Personal Bests ===
+
+export interface PersonalBest {
+  id: string;
+  type: string;
+  value: number;
+  workoutUuid: string;
+  achievedAt: string;
+}
+
+export async function getPersonalBests(): Promise<PersonalBest[]> {
+  const rows = db.prepare('SELECT * FROM personal_bests').all() as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    value: r.value,
+    workoutUuid: r.workout_uuid,
+    achievedAt: r.achieved_at,
+  }));
+}
+
+export async function checkAndStorePBs(data: WorkoutData) {
+  const pbs = [
+    { type: '1k', value: data.distance >= 1 ? parsePaceToMinutes(data.pace) : null },
+    { type: '5k', value: data.distance >= 5 ? parsePaceToMinutes(data.pace) : null },
+    { type: '10k', value: data.distance >= 10 ? parsePaceToMinutes(data.pace) : null },
+  ];
+
+  for (const pb of pbs) {
+    if (pb.value === null) continue;
+
+    const existing = db.prepare('SELECT value FROM personal_bests WHERE type = ?').get(pb.type) as { value: number } | undefined;
+
+    if (!existing || pb.value < existing.value) {
+      db.prepare(`
+        INSERT OR REPLACE INTO personal_bests (id, type, value, workout_uuid, achieved_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(crypto.randomUUID(), pb.type, pb.value, data.uuid, data.startDate);
+    }
+  }
+}
+
+// === Training Plans ===
+
+export interface TrainingPlan {
+  id: string;
+  goal: string;
+  status: string;
+  sessions: any[];
+  startDate: string;
+  endDate?: string;
+}
+
+export async function getTrainingPlans(): Promise<TrainingPlan[]> {
+  const rows = db.prepare('SELECT * FROM training_plans ORDER BY created_at DESC').all() as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    goal: r.goal,
+    status: r.status,
+    sessions: JSON.parse(r.sessions_json || '[]'),
+    startDate: r.start_date,
+    endDate: r.end_date,
+  }));
+}
+
+export async function saveTrainingPlan(goal: string, sessions: any[]) {
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO training_plans (id, goal, sessions_json)
+    VALUES (?, ?, ?)
+  `).run(id, goal, JSON.stringify(sessions));
+  return { success: true, id };
+}
+
+// === Body Metrics ===
+
+export interface BodyMetric {
+  id: string;
+  date: string;
+  weight?: number;
+  muscleMass?: number;
+  fatPercentage?: number;
+  sorenessLevel?: number;
+  notes?: string;
+}
+
+export async function getBodyMetrics(): Promise<BodyMetric[]> {
+  const rows = db.prepare('SELECT * FROM body_metrics ORDER BY date DESC').all() as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    date: r.date,
+    weight: r.weight,
+    muscleMass: r.muscle_mass,
+    fatPercentage: r.fat_percentage,
+    sorenessLevel: r.soreness_level,
+    notes: r.notes,
+  }));
+}
+
+export async function saveBodyMetric(metric: Omit<BodyMetric, 'id'>) {
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO body_metrics (id, date, weight, muscle_mass, fat_percentage, soreness_level, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, metric.date, metric.weight, metric.muscleMass, metric.fatPercentage, metric.sorenessLevel, metric.notes);
+  return { success: true, id };
+}
+
+// === Route Intelligence ===
+
+export interface Route {
+  id: string;
+  name: string;
+  fingerprint: string;
+  distance: number;
+}
+
+export async function getRoutes(): Promise<Route[]> {
+  const rows = db.prepare('SELECT * FROM routes').all() as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    fingerprint: r.fingerprint,
+    distance: r.distance,
+  }));
+}
+
+export async function matchAndAssignRoute(workoutUuid: string, routeJson: string) {
+  if (!routeJson) return;
+  
+  // Very simple "Route Intelligence": use first coordinate as fingerprint for now
+  // In a real app, this would be a geometric simplify + hash
+  const coords = JSON.parse(routeJson);
+  if (!coords || coords.length === 0) return;
+  
+  const fingerprint = `${coords[0].lat.toFixed(4)},${coords[0].lng.toFixed(4)}`;
+  
+  let route = db.prepare('SELECT id FROM routes WHERE fingerprint = ?').get(fingerprint) as { id: string } | undefined;
+  
+  if (!route) {
+    const id = crypto.randomUUID();
+    db.prepare('INSERT INTO routes (id, name, fingerprint) VALUES (?, ?, ?)').run(id, 'New Route', fingerprint);
+    route = { id };
+  }
+  
+  db.prepare('UPDATE workouts SET route_id = ? WHERE uuid = ?').run(route.id, workoutUuid);
+  return { success: true, routeId: route.id };
 }

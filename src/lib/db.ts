@@ -2,8 +2,16 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-const DB_DIR = path.join(process.cwd(), 'data');
+// RUNFORM_DATA_DIR can be set to override the data directory location.
+// Falls back to <cwd>/data, which works correctly when the server is started
+// from the project root (npm run dev / next start).
+const DB_DIR = process.env.RUNFORM_DATA_DIR
+  ? path.resolve(process.env.RUNFORM_DATA_DIR)
+  : path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DB_DIR, 'workouts.db');
+
+console.log('[RunForm] DB path:', DB_PATH);
+
 
 fs.mkdirSync(DB_DIR, { recursive: true });
 
@@ -137,6 +145,66 @@ applyMigration(5, () => {
   }
   if (!existingColumnNames.has('route_json')) {
     db.exec('ALTER TABLE workouts ADD COLUMN route_json TEXT');
+  }
+});
+
+applyMigration(6, () => {
+  // 1. Training Plans
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS training_plans (
+      id TEXT PRIMARY KEY,
+      goal TEXT NOT NULL,
+      status TEXT DEFAULT 'active', -- active, completed, cancelled
+      sessions_json TEXT,         -- Store the full plan as JSON
+      start_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+      end_date DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // 2. Personal Bests
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS personal_bests (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,         -- '1k', '5k', '10k', 'half', 'full'
+      value REAL NOT NULL,        -- store as seconds or pace
+      workout_uuid TEXT REFERENCES workouts(uuid),
+      achieved_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(type)                -- Only one best for each type
+    )
+  `);
+
+  // 3. Body Metrics
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS body_metrics (
+      id TEXT PRIMARY KEY,
+      date TEXT NOT NULL,
+      weight REAL,
+      muscle_mass REAL,
+      fat_percentage REAL,
+      soreness_level INTEGER,     -- 1-10
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // 4. Routes (Route Intelligence)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS routes (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      fingerprint TEXT UNIQUE,    -- Used to match route geometry
+      distance REAL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  const existingColumns = db.prepare('PRAGMA table_info(workouts)').all() as Array<{ name: string }>;
+  const existingColumnNames = new Set(existingColumns.map((column) => column.name));
+
+  if (!existingColumnNames.has('route_id')) {
+    db.exec('ALTER TABLE workouts ADD COLUMN route_id TEXT REFERENCES routes(id)');
   }
 });
 

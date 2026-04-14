@@ -69,10 +69,17 @@ export type VersusSummary = {
 };
 
 export function parsePaceToMinutes(pace: string) {
-  const [minutesPart, secondsPartRaw = '0'] = pace.split('′');
-  const secondsPart = secondsPartRaw.replace(/\D/g, '');
-  const minutes = Number.parseInt(minutesPart, 10) || 0;
-  const seconds = Number.parseInt(secondsPart, 10) || 0;
+  const normalized = pace.trim();
+  const match = normalized.match(/(\d+)\s*[:'′]\s*(\d{1,2})/);
+
+  if (match) {
+    const minutes = Number.parseInt(match[1], 10) || 0;
+    const seconds = Number.parseInt(match[2], 10) || 0;
+    return minutes + seconds / 60;
+  }
+
+  const minutes = Number.parseInt(normalized.replace(/\D/g, ''), 10) || 0;
+  const seconds = 0;
   return minutes + seconds / 60;
 }
 

@@ -49,7 +49,13 @@ export function useWorkoutData() {
   };
 
   const refreshData = async () => {
-    const data = await getDashboardData();
+    let data: Awaited<ReturnType<typeof getDashboardData>>;
+    try {
+      data = await getDashboardData();
+    } catch (err) {
+      console.error('[RunForm] refreshData: getDashboardData() failed:', err);
+      return;
+    }
     setWorkout(data.latestWorkout);
     setHistory(data.history);
     await loadShoes();
@@ -93,11 +99,47 @@ export function useWorkoutData() {
   };
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refreshData();
-    }, 0);
+    // Retry logic: if the Server Action fails on first load (server still
+    // warming up in production), retry up to 3 times with increasing delays.
+    let cancelled = false;
+    const pendingTimers: number[] = [];
+    const delays = [0, 1000, 2000, 4000];
 
-    return () => window.clearTimeout(timer);
+    const tryLoad = async (attempt: number) => {
+      if (cancelled) return;
+      let data: Awaited<ReturnType<typeof getDashboardData>>;
+      try {
+        data = await getDashboardData();
+      } catch (err) {
+        console.error(`[RunForm] Load attempt ${attempt + 1} failed:`, err);
+        if (attempt + 1 < delays.length) {
+          const t = window.setTimeout(() => void tryLoad(attempt + 1), delays[attempt + 1]);
+          pendingTimers.push(t);
+        }
+        return;
+      }
+      if (cancelled) return;
+      setWorkout(data.latestWorkout);
+      setHistory(data.history);
+      await loadShoes();
+      if (!hasInitializedCalendar.current && data.history.length > 0) {
+        const latestDate = new Date(data.history[0].startDate);
+        const year = latestDate.getFullYear();
+        const month = `${latestDate.getMonth() + 1}`.padStart(2, '0');
+        const day = `${latestDate.getDate()}`.padStart(2, '0');
+        setSelectedDateKey(`${year}-${month}-${day}`);
+        setCurrentMonth(new Date(latestDate.getFullYear(), latestDate.getMonth(), 1));
+        hasInitializedCalendar.current = true;
+      }
+    };
+
+    const initial = window.setTimeout(() => void tryLoad(0), 0);
+    pendingTimers.push(initial);
+
+    return () => {
+      cancelled = true;
+      pendingTimers.forEach((t) => window.clearTimeout(t));
+    };
   }, []);
 
   useEffect(() => {
