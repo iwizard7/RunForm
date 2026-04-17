@@ -62,7 +62,7 @@ import { NextWorkoutInsights } from '@/components/ai/NextWorkoutInsights';
 import { ShareCardModal } from '@/components/share/ShareCardModal';
 import { ComparisonRow, DetailRow, MetricLabel, SidebarItem } from '@/components/ui/AppPrimitives';
 
-const APP_VERSION = '0.3.3';
+const APP_VERSION = '0.4.2';
 
 export default function Home() {
   const {
@@ -270,7 +270,7 @@ export default function Home() {
               objectFit: 'contain'
             }}
           />
-          <p className="secondary-text" style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '10px' }}>v{APP_VERSION} Alpha</p>
+          <p className="secondary-text" style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '10px' }}>v{APP_VERSION}</p>
         </div>
 
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -397,74 +397,139 @@ export default function Home() {
                   ))}
                 </section>
 
-                <section style={{ display: 'grid', gridTemplateColumns: '1.8fr 1.2fr', gap: '20px', minHeight: '400px' }}>
-                  {/* HR Analysis Chart */}
+                <section style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.6fr', gap: '20px', minHeight: '400px' }}>
+                  {/* Unified HR Distribution Card */}
                   <div className="premium-card" style={{ display: 'flex', flexDirection: 'column' }}>
                     <h3 style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Zap size={18} className="accent-text" /> {t.hrAnalysis}
+                      <Activity size={18} className="accent-text" /> {lang === 'ru' ? 'Распределение пульса' : 'Heart Rate Distribution'}
                     </h3>
-                    <div style={{ width: '100%', flexGrow: 1, minHeight: '280px' }}>
+                    <div style={{ display: 'flex', gap: '24px', flexGrow: 1, alignItems: 'center' }}>
+                      <div style={{ width: '160px', height: '160px', flexShrink: 0 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={hrZonesData}
+                              innerRadius={52}
+                              outerRadius={72}
+                              paddingAngle={4}
+                              dataKey="value"
+                              stroke="none"
+                            >
+                              {hrZonesData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {hrZonesData.map((zone, idx) => (
+                          <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: zone.color }}></div>
+                              <span style={{ fontSize: '0.88rem', color: '#cad3df' }}>{zone.name}</span>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: '0.88rem', fontWeight: 700 }}>{zone.percentage}%</div>
+                              <div className="secondary-text" style={{ fontSize: '0.72rem' }}>{zone.formatted}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div style={{ width: '100%', height: '140px', marginTop: '24px' }}>
                       <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={hrZonesData}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
-                            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#a0a0a0', fontSize: 11}} />
-                            <YAxis 
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{fill: '#a0a0a0', fontSize: 11}} 
-                                label={{ value: lang === 'ru' ? 'минуты' : 'minutes', angle: -90, position: 'insideLeft', fill: '#606060', offset: 10 }}
-                            />
-                            <Tooltip 
-                              cursor={{fill: 'rgba(255,255,255,0.03)'}}
-                              contentStyle={{ background: '#121212', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }} 
-                              itemStyle={{ color: '#fff' }}
-                            />
-                            <Bar dataKey="minutes" radius={[6, 6, 0, 0]}>
-                                {hrZonesData.map((entry, index) => (
-                                    <Cell key={`cell-${index}`} fill={entry.color} />
-                                ))}
-                            </Bar>
-                          </BarChart>
+                        <BarChart data={hrZonesData} layout="vertical" margin={{ left: -20 }}>
+                          <XAxis type="number" hide />
+                          <YAxis dataKey="name" type="category" hide />
+                          <Tooltip 
+                            cursor={{fill: 'transparent'}}
+                            contentStyle={{ background: '#121212', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }} 
+                          />
+                          <Bar dataKey="minutes" radius={[0, 4, 4, 0]} barSize={14}>
+                            {hrZonesData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Bar>
+                        </BarChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
 
-                  {/* HR Zones Distribution with List */}
+                  {/* Running Form & Efficiency Analysis Card */}
                   <div className="premium-card" style={{ display: 'flex', flexDirection: 'column' }}>
-                    <h3 style={{ marginBottom: '16px' }}>{t.hrZones}</h3>
-                    <div style={{ width: '100%', height: '180px' }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={hrZonesData}
-                            innerRadius={55}
-                            outerRadius={75}
-                            paddingAngle={8}
-                            dataKey="value"
-                            stroke="none"
-                          >
-                            {hrZonesData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                          </Pie>
-                        </PieChart>
-                      </ResponsiveContainer>
+                    <h3 style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Gauge size={18} style={{ color: '#34c759' }} /> {lang === 'ru' ? 'Техника и эффективность' : 'Form & Efficiency'}
+                    </h3>
+                    
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', flexGrow: 1 }}>
+                      <div style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <p className="secondary-text" style={{ fontSize: '0.78rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Footprints size={12} /> {lang === 'ru' ? 'Длина шага' : 'Stride Length'}
+                        </p>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                          <h3 style={{ color: '#007aff', fontSize: '1.6rem' }}>{currentEfficiency?.strideLength || 0}</h3>
+                          <span className="secondary-text" style={{ fontSize: '0.85rem' }}>cm</span>
+                        </div>
+                      </div>
+                      
+                      <div style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <p className="secondary-text" style={{ fontSize: '0.78rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Activity size={12} /> {lang === 'ru' ? 'Каденс' : 'Cadence'}
+                        </p>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                          <h3 style={{ color: '#ff2d55', fontSize: '1.6rem' }}>{workout.cadence}</h3>
+                          <span className="secondary-text" style={{ fontSize: '0.85rem' }}>spm</span>
+                        </div>
+                      </div>
+                      
+                      <div style={{ padding: '16px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <p className="secondary-text" style={{ fontSize: '0.78rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Zap size={12} /> {lang === 'ru' ? 'Метров за удар' : 'Meters/Beat'}
+                        </p>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                          <h3 style={{ color: '#ff9500', fontSize: '1.6rem' }}>{currentEfficiency?.metersPerBeat.toFixed(2) || 0}</h3>
+                          <span className="secondary-text" style={{ fontSize: '0.85rem' }}>m</span>
+                        </div>
+                      </div>
+                      
+                      <div style={{ padding: '16px', borderRadius: '16px', background: 'rgba(52,199,89,0.08)', border: '1px solid rgba(52,199,89,0.12)' }}>
+                        <p className="secondary-text" style={{ fontSize: '0.78rem', marginBottom: '8px', color: '#34c759' }}>
+                           {lang === 'ru' ? 'Эффективность' : 'Efficiency'}
+                        </p>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                          <h3 style={{ color: '#34c759', fontSize: '1.8rem' }}>{currentEfficiency?.score || 0}</h3>
+                          <span className="secondary-text" style={{ fontSize: '0.8rem', color: '#34c759' }}>pts</span>
+                        </div>
+                      </div>
                     </div>
                     
-                    {/* Zones List Legend */}
-                    <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                        {hrZonesData.map((zone, idx) => (
-                            <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: zone.color }}></div>
-                                    <span style={{ fontSize: '0.9rem', color: '#f0f0f0' }}>{zone.name}</span>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <span className="secondary-text" style={{ fontSize: '0.85rem' }}>{zone.formatted}</span>
-                                    <span style={{ fontSize: '0.9rem', fontWeight: 600, minWidth: '40px', textAlign: 'right' }}>{zone.percentage}%</span>
-                                </div>
-                            </div>
-                        ))}
+                    <div style={{ marginTop: '24px', padding: '18px', borderRadius: '18px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <h4 style={{ fontSize: '0.88rem', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Sparkles size={14} style={{ color: '#ffd60a' }} /> {lang === 'ru' ? 'Сравнение с лучшим результатом' : 'vs. All-time Best efficiency'}
+                      </h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', marginBottom: '4px' }}>
+                          <span className="secondary-text">{lang === 'ru' ? 'Эффективность бега' : 'Running efficiency score'}</span>
+                          <span style={{ fontWeight: 700, color: (currentEfficiency?.score || 0) >= (bestEfficiencyWorkout ? getEfficiencyMetrics(bestEfficiencyWorkout).score : 0) ? '#34c759' : '#fff' }}>
+                            {currentEfficiency?.score || 0} / {bestEfficiencyWorkout ? getEfficiencyMetrics(bestEfficiencyWorkout).score : 0}
+                          </span>
+                        </div>
+                        <div style={{ height: '8px', borderRadius: '99px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                          <div style={{ 
+                            width: `${Math.min(100, ((currentEfficiency?.score || 0) / (bestEfficiencyWorkout ? getEfficiencyMetrics(bestEfficiencyWorkout).score || 1 : 1)) * 100)}%`, 
+                            height: '100%', 
+                            background: 'linear-gradient(90deg, #34c759 0%, #30d158 100%)',
+                            borderRadius: '99px'
+                          }} />
+                        </div>
+                        <p style={{ fontSize: '0.72rem', color: '#8b9ab1', marginTop: '4px' }}>
+                          {lang === 'ru' 
+                            ? 'Показывает, насколько технично прошла эта сессия относительно вашего пика.'
+                            : 'Indicates how technical this session was compared to your absolute peak.'}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -1139,12 +1204,12 @@ export default function Home() {
               </div>
               <div style={{ padding: '18px', borderRadius: '18px', background: 'rgba(255,255,255,0.03)' }}>
                 <MetricLabel
-                  label={lang === 'ru' ? 'Темп / пульс' : 'Pace / heart rate'}
+                  label={lang === 'ru' ? 'Метров за удар' : 'Meters per beat'}
                   hint={lang === 'ru'
-                    ? 'Соотношение темпа к среднему пульсу. Это вспомогательная метрика эффективности, а не абсолютный стандарт.'
-                    : 'Pace-to-average-heart-rate ratio. A helper efficiency metric, not an absolute benchmark.'}
+                    ? 'Дистанция в метрах, которую вы пробигаете за один удар сердца. Чем выше показатель, тем вы экономичнее.'
+                    : 'The distance in meters you cover with each heartbeat. Higher values mean better efficiency.'}
                 />
-                <h3 style={{ marginTop: '8px' }}>{currentEfficiency ? currentEfficiency.pacePerHr.toFixed(4) : '—'}</h3>
+                <h3 style={{ marginTop: '8px' }}>{currentEfficiency ? currentEfficiency.metersPerBeat.toFixed(2) : '—'}</h3>
               </div>
               <div style={{ padding: '18px', borderRadius: '18px', background: 'rgba(255,255,255,0.03)' }}>
                 <MetricLabel
@@ -2110,7 +2175,7 @@ export default function Home() {
                     <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Приложение' : 'App'}</h3>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span>{lang === 'ru' ? 'Версия' : 'Version'}</span>
-                          <span className="secondary-text">v{APP_VERSION} Alpha</span>
+                          <span className="secondary-text">v{APP_VERSION}</span>
                     </div>
                 </div>
                 <button 

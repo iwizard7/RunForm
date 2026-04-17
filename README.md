@@ -287,6 +287,20 @@ npm run build
 - The default AI model name is hardcoded in the current implementation
 - The local database is excluded from version control by `.gitignore`
 
+## Changelog
+
+### v0.4.2 (Latest)
+- **UI Redesign**: Merged Heart Rate Analysis and Zones into a single unified "Cardio Distribution" card.
+- **New Analysis Card**: Added "Form & Efficiency" panel showing Stride Length, Cadence, and Meters per beat.
+- **Performance Tracking**: Added "Comparison with Best Result" bar for technical efficiency metrics.
+- **Version Cleanup**: Updated UI to display current version correctly and removed outdated "Alpha" suffixes.
+
+### v0.4.1
+- **Metric Accuracy**: Corrected "Stride length" calculation from meters to centimeters.
+- **New Efficiency Metric**: Replaced "Pace/HR" ratio with the more intuitive "Meters per beat" (higher is better).
+- **Algorithm Update**: Refined Running Efficiency Score targets (cadence target 170 spm, normalized HR economy).
+- **Infrastructure**: Fixed startup scripts and desktop shortcuts to handle project directory renames gracefully.
+
 ## License
 
 No license has been defined yet in this repository.

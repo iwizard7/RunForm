@@ -132,13 +132,13 @@ export function getIntensityScore(item: WorkoutData, prefs: UserPreferences = de
 
 export function getEfficiencyMetrics(item: WorkoutData) {
   const paceMinutes = parsePaceToMinutes(item.pace);
-  const pacePerHr = item.avgHeartRate > 0 ? Number((paceMinutes / item.avgHeartRate).toFixed(4)) : 0;
-  const strideLength = item.steps > 0 ? Math.round((item.distance * 1000) / item.steps) : 0;
-  const cadenceBand = item.cadence >= 115 ? 100 : Math.max(0, Math.round((item.cadence / 115) * 100));
-  const hrEconomy = item.avgHeartRate > 0 ? Math.max(0, Math.min(100, Math.round((150 - item.avgHeartRate) * 2))) : 0;
-  const paceScore = Math.max(0, Math.min(100, Math.round((10 / Math.max(paceMinutes, 0.1)) * 60)));
-  const score = Math.round((cadenceBand * 0.35) + (hrEconomy * 0.3) + (paceScore * 0.2) + (Math.min(strideLength, 110) / 110) * 15);
-  return { pacePerHr, strideLength, cadenceBand, hrEconomy, score };
+  const metersPerBeat = item.avgHeartRate > 0 ? Number((1000 / (item.avgHeartRate * Math.max(paceMinutes, 0.1))).toFixed(3)) : 0;
+  const strideLength = item.steps > 0 ? Math.round((item.distance * 100000) / item.steps) : 0;
+  const cadenceBand = item.cadence >= 170 ? 100 : Math.max(0, Math.round((item.cadence / 170) * 100));
+  const hrEconomy = item.avgHeartRate > 0 ? Math.max(0, Math.min(100, Math.round((180 - item.avgHeartRate) * 1.5))) : 0;
+  const paceScore = Math.max(0, Math.min(100, Math.round((6 / Math.max(paceMinutes, 0.1)) * 100)));
+  const score = Math.round((cadenceBand * 0.3) + (hrEconomy * 0.25) + (paceScore * 0.25) + (Math.min(strideLength, 150) / 150) * 20);
+  return { metersPerBeat, strideLength, cadenceBand, hrEconomy, score };
 }
 
 export function getWarmupAnalysis(item: WorkoutData, lang: Language) {
