@@ -17,9 +17,13 @@ import {
   assignShoeToWorkout,
   clearAllWorkouts,
   clearChatMessages,
+  createSegment,
+  deleteSegment,
   ensurePersonalBests,
   getAllWorkouts,
   getChatMessages,
+  getSegmentEfforts,
+  getSegmentsForRoute,
   getShoes,
   matchAndAssignRoute,
   saveWorkout,
@@ -277,6 +281,85 @@ export async function runDatabaseSuite(): Promise<void> {
     assertEqual(result.success, false, 'short track rejected');
     const routes = db.prepare('SELECT COUNT(*) AS count FROM routes').get() as { count: number };
     assertEqual(routes.count, 1, 'no extra route created');
+  });
+
+  group('database: segments');
+
+  // Two runs on the same course geometry (identical fingerprint → same route),
+  // five seconds apart per sample. The second is one second per sample faster,
+  // so it should win the segment.
+  const SEGMENT_T0 = Date.parse('2026-03-01T09:00:00Z');
+  const makeTimedCourse = (stepMs: number) =>
+    Array.from({ length: 40 }, (_, index) => ({
+      lat: 55.75 + index * 0.0004,
+      lng: 37.62 + index * 0.0004,
+      t: SEGMENT_T0 + index * stepMs,
+    }));
+
+  let segmentRouteId: string | null = null;
+  let createdSegmentId: string | null = null;
+
+  test('a segment scores existing runs on its route', async () => {
+    const slow = makeTimedCourse(5000);
+    const saved = await saveWorkout(parseWorkoutJSON({ ...baseWorkout, uuid: 'test-seg-run-slow', route: slow }));
+    assertEqual(saved.success, true, 'run with timed track saved');
+
+    const row = db.prepare('SELECT route_id FROM workouts WHERE uuid = ?').get('test-seg-run-slow') as {
+      route_id: string | null;
+    };
+    segmentRouteId = row.route_id;
+    assert(segmentRouteId !== null, 'route matched by fingerprint');
+
+    const start = slow[5];
+    const end = slow[25];
+    const created = await createSegment(segmentRouteId!, 'Finish push', { lat: start.lat, lng: start.lng }, { lat: end.lat, lng: end.lng });
+    assertEqual(created.success, true, 'segment created');
+    createdSegmentId = created.segmentId ?? null;
+    assert(createdSegmentId !== null, 'segment id returned');
+
+    const segments = await getSegmentsForRoute(segmentRouteId!);
+    assertEqual(segments.length, 1, 'one segment on the route');
+    assertEqual(segments[0].effortCount, 1, 'existing run scored');
+    // 20 intervals × 5000 ms = 100 s.
+    assertEqual(segments[0].bestSeconds, 100, 'effort time from timestamps');
+  });
+
+  test('a faster run takes the top spot and re-import keeps one effort', async () => {
+    const fast = makeTimedCourse(4500);
+    await saveWorkout(parseWorkoutJSON({ ...baseWorkout, uuid: 'test-seg-run-fast', route: fast }));
+
+    let efforts = await getSegmentEfforts(createdSegmentId!);
+    assertEqual(efforts.length, 2, 'both runs scored');
+    assertEqual(efforts[0].workoutUuid, 'test-seg-run-fast', 'faster run ranks first');
+    assertEqual(efforts[0].isPersonalBest, true, 'faster run is the PR');
+    assertEqual(efforts[1].isPersonalBest, false, 'slower run is not');
+    // 20 intervals × 4500 ms = 90 s.
+    assertEqual(efforts[0].seconds, 90, 'faster effort time');
+
+    // Re-import must not duplicate the effort row.
+    await saveWorkout(parseWorkoutJSON({ ...baseWorkout, uuid: 'test-seg-run-fast', route: fast }));
+    efforts = await getSegmentEfforts(createdSegmentId!);
+    assertEqual(efforts.length, 2, 're-import keeps a single effort per run');
+  });
+
+  test('deleting a segment cascades to its efforts', async () => {
+    const remaining = await deleteSegment(createdSegmentId!);
+    assertEqual(remaining.success, true, 'segment deleted');
+    const segments = await getSegmentsForRoute(segmentRouteId!);
+    assertEqual(segments.length, 0, 'no segments left');
+    const efforts = db.prepare('SELECT COUNT(*) AS count FROM segment_efforts').get() as { count: number };
+    assertEqual(efforts.count, 0, 'efforts cascade-deleted');
+  });
+
+  test('a too-short segment is rejected', async () => {
+    const track = makeTimedCourse(5000);
+    const created = await createSegment(
+      segmentRouteId!,
+      'Tiny',
+      track[3],
+      { lat: track[3].lat + 0.0003, lng: track[3].lng }, // ~33 m north — under the 50 m floor
+    );
+    assertEqual(created.success, false, '50 m minimum enforced');
   });
 
   group('database: re-import safety');

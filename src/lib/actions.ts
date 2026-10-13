@@ -1,9 +1,10 @@
 'use server';
 
 import db, { DB_DIR } from './db';
-import { WorkoutData } from './parser';
+import { WorkoutData, RoutePoint } from './parser';
 import { buildPersonalBestCandidates, selectImprovedRecords } from './personal-best';
 import { computeRouteFingerprint } from './routes';
+import { computeSegmentEffort, haversineKm } from './segments';
 import { getWorkoutCondition } from './workout-condition';
 import {
   createBackup,
@@ -745,7 +746,194 @@ export async function matchAndAssignRoute(workoutUuid: string, routeJson: string
   }
 
   db.prepare('UPDATE workouts SET route_id = ? WHERE uuid = ?').run(routeId, workoutUuid);
+
+  // Score the run against any segments already defined on this course.
+  const hasSegments = db.prepare('SELECT id FROM segments WHERE route_id = ? LIMIT 1').get(routeId);
+  if (hasSegments) {
+    await recomputeSegmentEffortsForWorkout(workoutUuid, routeId);
+  }
+
   return { success: true as const, routeId };
+}
+
+// === Segments ===
+//
+// Segment math (crossing detection, effort timing) is pure and lives in
+// ./segments.ts; these actions just persist definitions and recompute efforts
+// from each workout's stored GPS track. Efforts are refreshed on route
+// assignment, so importing or re-importing a run scores it automatically.
+
+async function recomputeSegmentEffortsForWorkout(workoutUuid: string, routeId: string) {
+  const segments = db
+    .prepare('SELECT id, start_lat, start_lng, end_lat, end_lng FROM segments WHERE route_id = ?')
+    .all(routeId) as Array<{ id: string; start_lat: number; start_lng: number; end_lat: number; end_lng: number }>;
+  if (segments.length === 0) return;
+
+  const row = db.prepare('SELECT route_json FROM workouts WHERE uuid = ?').get(workoutUuid) as
+    | { route_json: string | null }
+    | undefined;
+  if (!row?.route_json) return;
+
+  let points: RoutePoint[];
+  try {
+    points = JSON.parse(row.route_json) as RoutePoint[];
+  } catch {
+    return;
+  }
+  if (!Array.isArray(points) || points.length < 2) return;
+
+  const upsert = db.prepare(`
+    INSERT INTO segment_efforts (id, segment_id, workout_uuid, seconds, pace, distance, started_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(segment_id, workout_uuid)
+    DO UPDATE SET seconds = excluded.seconds, pace = excluded.pace,
+                  distance = excluded.distance, started_at = excluded.started_at
+  `);
+
+  for (const segment of segments) {
+    const effort = computeSegmentEffort(workoutUuid, points, {
+      start: { lat: segment.start_lat, lng: segment.start_lng },
+      end: { lat: segment.end_lat, lng: segment.end_lng },
+    });
+    if (!effort) {
+      db.prepare('DELETE FROM segment_efforts WHERE segment_id = ? AND workout_uuid = ?').run(segment.id, workoutUuid);
+      continue;
+    }
+    upsert.run(
+      crypto.randomUUID(),
+      segment.id,
+      workoutUuid,
+      effort.seconds,
+      effort.paceMinPerKm,
+      effort.distanceKm,
+      new Date(effort.startedAt).toISOString(),
+    );
+  }
+}
+
+export type SegmentSummary = {
+  id: string;
+  routeId: string;
+  name: string;
+  start: { lat: number; lng: number };
+  end: { lat: number; lng: number };
+  distanceKm: number;
+  effortCount: number;
+  bestSeconds: number | null;
+};
+
+export async function getSegmentsForRoute(routeId: string): Promise<SegmentSummary[]> {
+  const rows = db
+    .prepare(`
+      SELECT s.id, s.route_id, s.name, s.start_lat, s.start_lng, s.end_lat, s.end_lng,
+             (SELECT COUNT(*) FROM segment_efforts e WHERE e.segment_id = s.id) AS effort_count,
+             (SELECT MIN(e.seconds) FROM segment_efforts e WHERE e.segment_id = s.id) AS best_seconds
+      FROM segments s WHERE s.route_id = ? ORDER BY s.created_at
+    `)
+    .all(routeId) as Array<{
+    id: string;
+    route_id: string;
+    name: string;
+    start_lat: number;
+    start_lng: number;
+    end_lat: number;
+    end_lng: number;
+    effort_count: number;
+    best_seconds: number | null;
+  }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    routeId: row.route_id,
+    name: row.name,
+    start: { lat: row.start_lat, lng: row.start_lng },
+    end: { lat: row.end_lat, lng: row.end_lng },
+    distanceKm: haversineKm({ lat: row.start_lat, lng: row.start_lng }, { lat: row.end_lat, lng: row.end_lng }),
+    effortCount: row.effort_count,
+    bestSeconds: row.best_seconds,
+  }));
+}
+
+export type SegmentEffortEntry = {
+  workoutUuid: string;
+  workoutName: string;
+  startDate: string;
+  seconds: number;
+  paceMinPerKm: number;
+  startedAt: string | null;
+  isPersonalBest: boolean;
+};
+
+export async function getSegmentEfforts(segmentId: string): Promise<SegmentEffortEntry[]> {
+  const rows = db
+    .prepare(`
+      SELECT e.workout_uuid, e.seconds, e.pace, e.started_at, w.name AS workout_name, w.start_date,
+             (SELECT MIN(x.seconds) FROM segment_efforts x WHERE x.segment_id = e.segment_id) AS best
+      FROM segment_efforts e
+      JOIN workouts w ON w.uuid = e.workout_uuid
+      WHERE e.segment_id = ?
+      ORDER BY e.seconds ASC
+    `)
+    .all(segmentId) as Array<{
+    workout_uuid: string;
+    seconds: number;
+    pace: number;
+    started_at: string | null;
+    workout_name: string;
+    start_date: string;
+    best: number;
+  }>;
+
+  return rows.map((row) => ({
+    workoutUuid: row.workout_uuid,
+    workoutName: row.workout_name,
+    startDate: row.start_date,
+    seconds: row.seconds,
+    paceMinPerKm: row.pace,
+    startedAt: row.started_at,
+    isPersonalBest: row.seconds === row.best,
+  }));
+}
+
+export async function createSegment(
+  routeId: string,
+  name: string,
+  start: { lat: number; lng: number },
+  end: { lat: number; lng: number },
+): Promise<{ success: boolean; error?: string; segmentId?: string }> {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return { success: false, error: 'Segment name is required' };
+  }
+  const distanceKm = haversineKm(start, end);
+  if (distanceKm < 0.05) {
+    return { success: false, error: 'Segment is too short (min 50 m)' };
+  }
+  const route = db.prepare('SELECT id FROM routes WHERE id = ?').get(routeId);
+  if (!route) {
+    return { success: false, error: 'Route not found' };
+  }
+
+  const segmentId = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO segments (id, route_id, name, start_lat, start_lng, end_lat, end_lng)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(segmentId, routeId, trimmed, start.lat, start.lng, end.lat, end.lng);
+
+  // Score every run already recorded on this route.
+  const workouts = db
+    .prepare('SELECT uuid FROM workouts WHERE route_id = ? AND route_json IS NOT NULL')
+    .all(routeId) as Array<{ uuid: string }>;
+  for (const workout of workouts) {
+    await recomputeSegmentEffortsForWorkout(workout.uuid, routeId);
+  }
+
+  return { success: true, segmentId };
+}
+
+export async function deleteSegment(segmentId: string): Promise<{ success: boolean }> {
+  db.prepare('DELETE FROM segments WHERE id = ?').run(segmentId);
+  return { success: true };
 }
 
 // === AI Coach Chat ===

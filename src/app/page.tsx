@@ -38,6 +38,7 @@ import {
   CalendarCheck,
   HeartPulse,
   MapPinned,
+  Flag,
   Trash2,
   Pencil,
   Weight,
@@ -76,6 +77,11 @@ import {
 // Type-only: keeps the Node-side backup module (better-sqlite3) out of the
 // client bundle while sharing the exact shapes with the server actions.
 import type { BackupEntry, DatabaseInfo } from '@/lib/backup';
+// Route segments: server actions are the same static imports the data hooks
+// use; the math helpers are pure and safe for the client bundle.
+import { createSegment, deleteSegment, getSegmentEfforts, getSegmentsForRoute } from '@/lib/actions';
+import type { SegmentEffortEntry, SegmentSummary } from '@/lib/actions';
+import { formatEffortPace, formatEffortTime, haversineKm } from '@/lib/segments';
 import { useWorkoutData } from '@/hooks/useWorkoutData';
 import { useRunFormData } from '@/hooks/useRunFormData';
 import { useAiCoach } from '@/hooks/useAiCoach';
@@ -168,6 +174,18 @@ export default function Home() {
   });
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [routeNameDraft, setRouteNameDraft] = useState('');
+  // Route segments panel (routes tab): one route's segments are loaded on
+  // demand, efforts are cached per expanded segment.
+  const [segmentsRouteId, setSegmentsRouteId] = useState<string | null>(null);
+  const [routeSegments, setRouteSegments] = useState<SegmentSummary[]>([]);
+  const [segmentEffortsBySegment, setSegmentEffortsBySegment] = useState<Record<string, SegmentEffortEntry[]>>({});
+  const [expandedSegmentId, setExpandedSegmentId] = useState<string | null>(null);
+  const [segmentsBusy, setSegmentsBusy] = useState(false);
+  const [segmentFormOpen, setSegmentFormOpen] = useState(false);
+  const [segmentNameDraft, setSegmentNameDraft] = useState('');
+  const [segmentStartIdx, setSegmentStartIdx] = useState<number | null>(null);
+  const [segmentEndIdx, setSegmentEndIdx] = useState<number | null>(null);
+  const [segmentNotice, setSegmentNotice] = useState<string | null>(null);
   const [planNotice, setPlanNotice] = useState<string | null>(null);
   const [dbInfo, setDbInfo] = useState<DatabaseInfo | null>(null);
   const [backupList, setBackupList] = useState<BackupEntry[]>([]);
@@ -365,6 +383,122 @@ export default function Home() {
           : load < 80
             ? '#2ea043'
             : '#56d364';
+
+  // Segment creation needs a concrete track for the selected route: every run
+  // on the course shares the geometry (fingerprint match), so any of them
+  // provides the anchors.
+  const segmentTrack = useMemo(() => {
+    if (!segmentsRouteId) return [];
+    const match = history.find(
+      (item) => item.routeId === segmentsRouteId && (item.route?.length ?? 0) >= 2,
+    );
+    return match?.route ?? [];
+  }, [history, segmentsRouteId]);
+
+  // Anchor candidates every ~50 m with their cumulative distance — the two
+  // dropdowns that define a segment pick from this list.
+  const segmentMarkers = useMemo(() => {
+    if (segmentTrack.length < 2) return [];
+    const markers: Array<{ index: number; lat: number; lng: number; km: number }> = [
+      { index: 0, lat: segmentTrack[0].lat, lng: segmentTrack[0].lng, km: 0 },
+    ];
+    let cumulative = 0;
+    for (let index = 1; index < segmentTrack.length; index += 1) {
+      cumulative += haversineKm(segmentTrack[index - 1], segmentTrack[index]);
+      const isLast = index === segmentTrack.length - 1;
+      if (cumulative - markers[markers.length - 1].km >= 0.05 || isLast) {
+        markers.push({ index, lat: segmentTrack[index].lat, lng: segmentTrack[index].lng, km: cumulative });
+      }
+    }
+    return markers;
+  }, [segmentTrack]);
+
+  const openSegmentsPanel = async (routeId: string) => {
+    if (segmentsRouteId === routeId) {
+      setSegmentsRouteId(null);
+      return;
+    }
+    setSegmentsRouteId(routeId);
+    setSegmentFormOpen(false);
+    setSegmentStartIdx(null);
+    setSegmentEndIdx(null);
+    setSegmentNameDraft('');
+    setSegmentNotice(null);
+    setExpandedSegmentId(null);
+    setSegmentsBusy(true);
+    try {
+      setRouteSegments(await getSegmentsForRoute(routeId));
+    } finally {
+      setSegmentsBusy(false);
+    }
+  };
+
+  const toggleSegmentEfforts = async (segmentId: string) => {
+    if (expandedSegmentId === segmentId) {
+      setExpandedSegmentId(null);
+      return;
+    }
+    setExpandedSegmentId(segmentId);
+    if (!segmentEffortsBySegment[segmentId]) {
+      const efforts = await getSegmentEfforts(segmentId);
+      setSegmentEffortsBySegment((previous) => ({ ...previous, [segmentId]: efforts }));
+    }
+  };
+
+  const handleCreateSegment = async () => {
+    if (!segmentsRouteId || segmentStartIdx === null || segmentEndIdx === null) return;
+    const start = segmentTrack[segmentStartIdx];
+    const end = segmentTrack[segmentEndIdx];
+    if (!start || !end) return;
+    setSegmentsBusy(true);
+    setSegmentNotice(null);
+    try {
+      const result = await createSegment(
+        segmentsRouteId,
+        segmentNameDraft.trim() || (lang === 'ru' ? 'Сегмент' : 'Segment'),
+        { lat: start.lat, lng: start.lng },
+        { lat: end.lat, lng: end.lng },
+      );
+      if (!result.success) {
+        setSegmentNotice(result.error ?? (lang === 'ru' ? 'Не удалось создать сегмент' : 'Could not create the segment'));
+        return;
+      }
+      setSegmentFormOpen(false);
+      setSegmentNameDraft('');
+      setSegmentStartIdx(null);
+      setSegmentEndIdx(null);
+      setSegmentEffortsBySegment({});
+      setRouteSegments(await getSegmentsForRoute(segmentsRouteId));
+    } finally {
+      setSegmentsBusy(false);
+    }
+  };
+
+  const handleDeleteSegment = async (segmentId: string) => {
+    setSegmentsBusy(true);
+    try {
+      await deleteSegment(segmentId);
+      setExpandedSegmentId(null);
+      setSegmentEffortsBySegment((previous) => {
+        const next = { ...previous };
+        delete next[segmentId];
+        return next;
+      });
+      if (segmentsRouteId) {
+        setRouteSegments(await getSegmentsForRoute(segmentsRouteId));
+      }
+    } finally {
+      setSegmentsBusy(false);
+    }
+  };
+
+  // A segment runs forward along the track: both anchors must be chosen and
+  // the start must come before the finish.
+  const segmentCanCreate =
+    segmentsBusy ||
+    segmentStartIdx === null ||
+    segmentEndIdx === null ||
+    segmentStartIdx >= segmentEndIdx;
 
   const {
     aiResponse,
@@ -3130,12 +3264,255 @@ export default function Home() {
                         <p className="secondary-text" style={{ fontSize: '0.8rem' }}>
                           {t.lastRun}: {route.lastRunAt ? new Date(route.lastRunAt).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US') : '—'}
                         </p>
+                        <button
+                          onClick={() => void openSegmentsPanel(route.id)}
+                          style={{
+                            marginTop: '12px',
+                            width: '100%',
+                            background: segmentsRouteId === route.id ? 'rgba(175,82,222,0.2)' : 'rgba(255,255,255,0.06)',
+                            color: segmentsRouteId === route.id ? '#d4a4f0' : 'inherit',
+                            border: `1px solid ${segmentsRouteId === route.id ? 'rgba(175,82,222,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                            padding: '9px',
+                            borderRadius: '9px',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                            fontSize: '0.85rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '7px',
+                          }}
+                        >
+                          <Flag size={14} />
+                          {lang === 'ru' ? 'Сегменты' : 'Segments'}
+                        </button>
                       </>
                     )}
                   </div>
                 ))}
               </div>
             )}
+
+              {segmentsRouteId && (
+                <div className="premium-card" style={{ border: '1px solid rgba(175, 82, 222, 0.3)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                      <Flag size={18} style={{ color: '#af52de', marginTop: '3px' }} />
+                      <div>
+                        <h3>
+                          {lang === 'ru' ? 'Сегменты' : 'Segments'}
+                          <span className="secondary-text" style={{ fontWeight: 400 }}>
+                            {' · '}{routes.find((item) => item.id === segmentsRouteId)?.name}
+                          </span>
+                        </h3>
+                        <p className="secondary-text" style={{ fontSize: '0.8rem', marginTop: '4px' }}>
+                          {lang === 'ru'
+                            ? 'Отрезок маршрута с личными рекордами и историей попыток. Все забеги по этому маршруту засчитываются автоматически.'
+                            : 'A slice of the course with personal bests and attempt history. Every run on this route is scored automatically.'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setSegmentsRouteId(null)}
+                      style={{ background: 'rgba(255,255,255,0.06)', color: 'inherit', border: '1px solid rgba(255,255,255,0.1)', padding: '7px 9px', borderRadius: '8px', cursor: 'pointer', display: 'flex' }}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+
+                  {routeSegments.length === 0 ? (
+                    <p className="secondary-text" style={{ fontSize: '0.9rem' }}>
+                      {segmentsBusy
+                        ? (lang === 'ru' ? 'Загрузка…' : 'Loading…')
+                        : (lang === 'ru'
+                            ? 'Сегментов пока нет. Выделите отрезок маршрута — например, финишную прямую — и следите за рекордами.'
+                            : 'No segments yet. Mark a slice of the course — say, the finishing straight — and track your records.')}
+                    </p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {routeSegments.map((segment) => (
+                        <div key={segment.id} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', overflow: 'hidden' }}>
+                          <div
+                            onClick={() => void toggleSegmentEfforts(segment.id)}
+                            style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', cursor: 'pointer' }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p style={{ fontWeight: 700, fontSize: '0.95rem' }}>{segment.name}</p>
+                              <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '2px' }}>
+                                {segment.distanceKm.toFixed(2)} {lang === 'ru' ? 'км' : 'km'} · {lang === 'ru' ? 'попыток' : 'attempts'}: {segment.effortCount}
+                              </p>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <p style={{ fontWeight: 800, color: '#af52de', fontFamily: 'ui-monospace, monospace', fontSize: '1.05rem' }}>
+                                {segment.bestSeconds !== null ? formatEffortTime(segment.bestSeconds) : '—'}
+                              </p>
+                              <p className="secondary-text" style={{ fontSize: '0.7rem' }}>{lang === 'ru' ? 'лучшее' : 'best'}</p>
+                            </div>
+                            <button
+                              aria-label={lang === 'ru' ? 'Удалить сегмент' : 'Delete segment'}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDeleteSegment(segment.id);
+                              }}
+                              style={{ background: 'rgba(255,59,48,0.12)', color: '#ff3b30', border: '1px solid rgba(255,59,48,0.25)', padding: '7px 9px', borderRadius: '8px', cursor: 'pointer', display: 'flex' }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+
+                          {expandedSegmentId === segment.id && (
+                            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', padding: '10px 14px 12px', background: 'rgba(255,255,255,0.02)' }}>
+                              {!segmentEffortsBySegment[segment.id] ? (
+                                <p className="secondary-text" style={{ fontSize: '0.85rem' }}>
+                                  {lang === 'ru' ? 'Загрузка попыток…' : 'Loading attempts…'}
+                                </p>
+                              ) : segmentEffortsBySegment[segment.id].length === 0 ? (
+                                <p className="secondary-text" style={{ fontSize: '0.85rem' }}>
+                                  {lang === 'ru'
+                                    ? 'Попыток пока нет — они появятся после следующего забега по маршруту.'
+                                    : 'No attempts yet — they will appear after your next run on this route.'}
+                                </p>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  {segmentEffortsBySegment[segment.id].map((effort, index) => (
+                                    <div key={effort.workoutUuid} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem' }}>
+                                      <span style={{ width: '28px', fontWeight: 800, color: index === 0 ? '#ffcc00' : 'rgba(255,255,255,0.45)' }}>#{index + 1}</span>
+                                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {new Date(effort.startDate).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US')}
+                                        {effort.workoutName ? ` · ${effort.workoutName}` : ''}
+                                      </span>
+                                      <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700 }}>{formatEffortTime(effort.seconds)}</span>
+                                      <span className="secondary-text" style={{ fontSize: '0.75rem', width: '64px', textAlign: 'right' }}>
+                                        {formatEffortPace(effort.paceMinPerKm)}/{lang === 'ru' ? 'км' : 'km'}
+                                      </span>
+                                      {effort.isPersonalBest && (
+                                        <span style={{ background: 'rgba(255,204,0,0.15)', color: '#ffcc00', border: '1px solid rgba(255,204,0,0.4)', borderRadius: '6px', padding: '2px 6px', fontSize: '0.65rem', fontWeight: 800 }}>
+                                          PR
+                                        </span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!segmentFormOpen ? (
+                    <button
+                      onClick={() => {
+                        setSegmentFormOpen(true);
+                        setSegmentNotice(null);
+                      }}
+                      style={{ marginTop: '14px', background: 'rgba(175,82,222,0.12)', color: '#d4a4f0', border: '1px dashed rgba(175,82,222,0.5)', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                    >
+                      <Plus size={16} />
+                      {lang === 'ru' ? 'Новый сегмент' : 'New segment'}
+                    </button>
+                  ) : (
+                    <div style={{ marginTop: '14px', borderTop: '1px dashed rgba(255,255,255,0.12)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {segmentMarkers.length < 2 ? (
+                        <p className="secondary-text" style={{ fontSize: '0.85rem' }}>
+                          {lang === 'ru'
+                            ? 'У маршрута нет GPS-трека с координатами — сегмент можно создать только на маршруте с треком.'
+                            : 'This route has no GPS track with coordinates — segments need a tracked route.'}
+                        </p>
+                      ) : (
+                        <>
+                          <input
+                            value={segmentNameDraft}
+                            onChange={(event) => setSegmentNameDraft(event.target.value)}
+                            placeholder={lang === 'ru' ? 'Название, например «Финишная прямая»' : 'Name, e.g. "Finishing straight"'}
+                            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', color: 'inherit', padding: '11px 13px', borderRadius: '10px', fontSize: '0.95rem' }}
+                          />
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                            <label className="secondary-text" style={{ fontSize: '0.8rem' }}>
+                              {lang === 'ru' ? 'Старт' : 'Start'}
+                              <select
+                                value={segmentStartIdx ?? ''}
+                                onChange={(event) => setSegmentStartIdx(event.target.value === '' ? null : Number(event.target.value))}
+                                style={{ display: 'block', width: '100%', marginTop: '6px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                              >
+                                <option value="">{lang === 'ru' ? '— выбрать —' : '— choose —'}</option>
+                                {segmentMarkers.map((marker) => (
+                                  <option key={marker.index} value={marker.index}>
+                                    {marker.km < 1
+                                      ? `${Math.round(marker.km * 1000)} ${lang === 'ru' ? 'м' : 'm'}`
+                                      : `${marker.km.toFixed(2)} ${lang === 'ru' ? 'км' : 'km'}`}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="secondary-text" style={{ fontSize: '0.8rem' }}>
+                              {lang === 'ru' ? 'Финиш' : 'Finish'}
+                              <select
+                                value={segmentEndIdx ?? ''}
+                                onChange={(event) => setSegmentEndIdx(event.target.value === '' ? null : Number(event.target.value))}
+                                style={{ display: 'block', width: '100%', marginTop: '6px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                              >
+                                <option value="">{lang === 'ru' ? '— выбрать —' : '— choose —'}</option>
+                                {segmentMarkers.map((marker) => (
+                                  <option key={marker.index} value={marker.index}>
+                                    {marker.km < 1
+                                      ? `${Math.round(marker.km * 1000)} ${lang === 'ru' ? 'м' : 'm'}`
+                                      : `${marker.km.toFixed(2)} ${lang === 'ru' ? 'км' : 'km'}`}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          {segmentStartIdx !== null && segmentEndIdx !== null && (
+                            <p className="secondary-text" style={{ fontSize: '0.8rem' }}>
+                              {lang === 'ru' ? 'Длина сегмента: ' : 'Segment length: '}
+                              <span style={{ color: '#d4a4f0', fontWeight: 700 }}>
+                                {haversineKm(segmentTrack[segmentStartIdx], segmentTrack[segmentEndIdx]).toFixed(2)} {lang === 'ru' ? 'км' : 'km'}
+                              </span>
+                              {segmentStartIdx >= segmentEndIdx && (
+                                <span style={{ color: '#ff9500' }}>
+                                  {' · '}{lang === 'ru' ? 'старт должен быть раньше финиша' : 'the start must come before the finish'}
+                                </span>
+                              )}
+                            </p>
+                          )}
+                          {segmentNotice && (
+                            <p style={{ color: '#ff3b30', fontSize: '0.85rem' }}>{segmentNotice}</p>
+                          )}
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              onClick={() => void handleCreateSegment()}
+                              disabled={segmentCanCreate}
+                              style={{
+                                background: '#af52de',
+                                color: '#fff',
+                                border: 'none',
+                                padding: '10px 16px',
+                                borderRadius: '10px',
+                                cursor: segmentCanCreate ? 'not-allowed' : 'pointer',
+                                fontWeight: 700,
+                                opacity: segmentCanCreate ? 0.5 : 1,
+                              }}
+                            >
+                              {lang === 'ru' ? 'Создать' : 'Create'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSegmentFormOpen(false);
+                                setSegmentNotice(null);
+                              }}
+                              style={{ background: 'rgba(255,255,255,0.06)', color: 'inherit', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 16px', borderRadius: '10px', cursor: 'pointer' }}
+                            >
+                              {t.cancel}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
           </div>
         )}
 

@@ -3,6 +3,13 @@ import { extractRoute, parseWorkoutJSON } from '@/lib/parser';
 import { computeRouteFingerprint, computeRouteLengthKm } from '@/lib/routes';
 import { computeWorkoutSplits, formatSplitPace } from '@/lib/splits';
 import { buildTrackGeometry, paceColor, projectRoute } from '@/lib/track';
+import {
+  computeSegmentEffort,
+  findCrossing,
+  formatEffortPace,
+  formatEffortTime,
+  haversineKm,
+} from '@/lib/segments';
 import { dateKey, getWeekPlanDays } from '@/lib/week';
 import { buildCacheKey } from '@/lib/ollama';
 
@@ -285,6 +292,74 @@ function makeTrack(count: number, startLat = 55.75, startLng = 37.62) {
     assert(base !== buildCacheKey('sys other', 'prompt', 'qwen3:4b'), 'system changes key');
     assert(base !== buildCacheKey('sys', 'prompt', 'qwen2.5:3b'), 'model changes key');
     assert(base !== buildCacheKey('sys', 'prompt', undefined), 'default model differs from an explicit one');
+  });
+
+  group('segments: crossing and effort math');
+
+  const makeTimedTrack = (count: number, startTime: number, stepMs = 5000) =>
+    Array.from({ length: count }, (_, index) => ({
+      lat: 55.75 + index * 0.0004,
+      lng: 37.62,
+      t: startTime + index * stepMs,
+    }));
+
+  test('haversine matches the known degrees-to-km ratio', () => {
+    const km = haversineKm({ lat: 55.75, lng: 37.62 }, { lat: 55.76, lng: 37.62 });
+    assert(Math.abs(km - 1.112) < 0.01, `0.01° of latitude ≈ 1.112 km, got ${km}`);
+  });
+
+  test('a crossing exactly at a sample takes that sample’s time', () => {
+    const T0 = 1760000000000;
+    const track = makeTimedTrack(40, T0);
+    const crossing = findCrossing(track, { lat: track[10].lat, lng: track[10].lng });
+    assertEqual(crossing?.timeMs, T0 + 10 * 5000, 'exact sample time');
+    assertEqual(crossing?.index, 10, 'sample index');
+  });
+
+  test('a crossing between samples is interpolated', () => {
+    const T0 = 1760000000000;
+    const track = makeTimedTrack(40, T0);
+    const midpoint = { lat: 55.75 + 5.5 * 0.0004, lng: 37.62 };
+    const crossing = findCrossing(track, midpoint);
+    assertEqual(crossing?.timeMs, T0 + 5 * 5000 + 2500, 'halfway between two samples');
+  });
+
+  test('an anchor far from the track is not a crossing', () => {
+    const track = makeTimedTrack(40, 1760000000000);
+    const far = { lat: track[10].lat, lng: track[10].lng + 0.002 };
+    assertEqual(findCrossing(track, far), null, 'anchor 130 m away rejected');
+  });
+
+  test('a track without timestamps cannot be scored', () => {
+    const track = Array.from({ length: 40 }, (_, index) => ({ lat: 55.75 + index * 0.0004, lng: 37.62 }));
+    assertEqual(findCrossing(track, { lat: track[5].lat, lng: track[5].lng }), null, 'no timestamps → null');
+  });
+
+  test('a forward pass scores the elapsed time', () => {
+    const T0 = 1760000000000;
+    const track = makeTimedTrack(40, T0);
+    const segment = { start: track[10], end: track[30] };
+    const effort = computeSegmentEffort('w-1', track, segment);
+    assertEqual(effort?.seconds, 100, '20 intervals of 5 s');
+    assert(effort !== null && effort.distanceKm > 0.88 && effort.distanceKm < 0.9, 'segment length ≈ 0.89 km');
+    assertEqual(effort?.startedAt, T0 + 10 * 5000, 'effort starts at the start crossing');
+  });
+
+  test('running the segment backwards is not scored', () => {
+    const T0 = 1760000000000;
+    const forward = makeTimedTrack(40, T0);
+    const reversed = forward
+      .slice()
+      .reverse()
+      .map((point, index) => ({ ...point, t: T0 + index * 5000 }));
+    const effort = computeSegmentEffort('w-2', reversed, { start: forward[10], end: forward[30] });
+    assertEqual(effort, null, 'reverse direction skipped');
+  });
+
+  test('effort formatters produce clock-style output', () => {
+    assertEqual(formatEffortTime(125), '2:05', 'minutes:seconds');
+    assertEqual(formatEffortTime(3725), '1:02:05', 'hours included');
+    assertEqual(formatEffortPace(4.83), '4:50', 'pace as m:ss');
   });
 
 summarize('parser/routes suite').catch((error) => {

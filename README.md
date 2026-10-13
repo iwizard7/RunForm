@@ -364,7 +364,10 @@ npm run build
 
 ## Changelog
 
-### v0.11.1 (Latest)
+### v0.12.0 (Latest)
+- **Route segments**: mark any slice of a recognized course (e.g. the finishing straight) as a segment and get local Strava-style tracking — personal bests, full attempt history with rank, time and pace, and automatic scoring of every run on the route, including future imports. Segments are defined by picking start/finish anchors ~50 m apart from the route's GPS track right in the Routes tab; database tables `segments` and `segment_efforts` with migration v9.
+
+### v0.11.1
 - **Training form window**: when the latest workout is older than 90 days, the CTL/ATL/TSB chart automatically widens its window (up to a year) so the form chart shows the real training history instead of an empty strip.
 
 ### v0.11.0

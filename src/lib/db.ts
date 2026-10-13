@@ -252,4 +252,38 @@ applyMigration(8, () => {
   db.exec('CREATE INDEX IF NOT EXISTS idx_ai_chat_created ON ai_chat_messages(created_at)');
 });
 
+applyMigration(9, () => {
+  // Segments are named slices of a course, anchored by two geographic points.
+  // Efforts are computed per workout from its stored GPS track; a workout is
+  // referenced by uuid (matching personal_bests) so deleting a workout cleans
+  // up its efforts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS segments (
+      id TEXT PRIMARY KEY,
+      route_id TEXT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      start_lat REAL NOT NULL,
+      start_lng REAL NOT NULL,
+      end_lat REAL NOT NULL,
+      end_lng REAL NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_segments_route ON segments(route_id)');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS segment_efforts (
+      id TEXT PRIMARY KEY,
+      segment_id TEXT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+      workout_uuid TEXT NOT NULL REFERENCES workouts(uuid) ON DELETE CASCADE,
+      seconds INTEGER NOT NULL,
+      pace REAL NOT NULL,
+      distance REAL NOT NULL,
+      started_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(segment_id, workout_uuid)
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_segment_efforts ON segment_efforts(segment_id, seconds)');
+});
+
 export default db;
