@@ -366,6 +366,11 @@ export async function runDatabaseSuite(): Promise<void> {
     const entry = await createBackup(dataDir);
     assert(entry.fileName.endsWith('.db'), 'backup file has a .db extension');
     assert(entry.sizeBytes > 0, 'backup file is not empty');
+    assert(
+      !fs.existsSync(path.join(backupsDir(dataDir), `${entry.fileName}-wal`)) &&
+        !fs.existsSync(path.join(backupsDir(dataDir), `${entry.fileName}-shm`)),
+      'backup is a single self-contained file without WAL/SHM sidecars',
+    );
 
     const listed = listBackups(dataDir).some((item) => item.fileName === entry.fileName);
     assertEqual(listed, true, 'backup shows up in the listing');

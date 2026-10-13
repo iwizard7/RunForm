@@ -169,6 +169,17 @@ export async function createBackup(dataDir: string, tag = ''): Promise<BackupEnt
   const full = path.join(dir, fileName);
   await db.backup(full);
 
+  // The snapshot is complete once backup() returns, but SQLite may leave
+  // WAL/SHM scratch files next to it. Normalizing the journal keeps every
+  // backup a single self-contained file that can simply be copied around.
+  const handle = new Database(full);
+  try {
+    handle.pragma('wal_checkpoint(TRUNCATE)');
+    handle.pragma('journal_mode = DELETE');
+  } finally {
+    handle.close();
+  }
+
   const stat = fs.statSync(full);
   return {
     fileName,

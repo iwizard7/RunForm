@@ -364,7 +364,10 @@ npm run build
 
 ## Changelog
 
-### v0.10.0 (Latest)
+### v0.10.1 (Latest)
+- **Self-contained backup files**: creating a backup now checkpoints and normalizes the journal, so each snapshot is a single `.db` file without WAL/SHM sidecars — safe to copy or archive as-is.
+
+### v0.10.0
 - **Database backup & restore**: the Settings screen now has a Backups panel — create a consistent snapshot of the whole database (workouts, shoes, plans, chat, health) with one click, download it as a file, upload a backup from another machine and restore it in place. Every restore first saves a safety copy of the current state, and invalid or foreign SQLite files are rejected before anything is touched. Files live in `data/backups/` next to the database.
 
 ### v0.9.1
