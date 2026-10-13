@@ -66,6 +66,13 @@ import { buildHomeMetrics, formatTime, getDateKey } from '@/lib/home-metrics';
 import { computeWorkoutSplits, formatSplitPace } from '@/lib/splits';
 import { formatVersionLabel } from '@/lib/app-version';
 import { formatPersonalBest, getTierDistance, PersonalBestType } from '@/lib/personal-best';
+import {
+  buildYearHeatmap,
+  computeAnnualGoal,
+  computeLoadSeries,
+  computeReadiness,
+  computeStreaks,
+} from '@/lib/training-load';
 // Type-only: keeps the Node-side backup module (better-sqlite3) out of the
 // client bundle while sharing the exact shapes with the server actions.
 import type { BackupEntry, DatabaseInfo } from '@/lib/backup';
@@ -279,6 +286,77 @@ export default function Home() {
     selectedWorkouts,
     preferences,
   });
+
+  // Тренировочная форма (вкладка «Индекс формы»): CTL/ATL/TSB, стрики, heatmap
+  // года, цель и готовность. Всё считается чистыми функциями поверх того же
+  // history, что уже есть на клиенте, — мгновенно и без запросов.
+  const trainingLoadSeries = useMemo(
+    () => computeLoadSeries(history, { days: 90, lthr: preferences.lthr ?? null }),
+    [history, preferences.lthr],
+  );
+  const streakStats = useMemo(() => computeStreaks(history), [history]);
+  const yearHeatmap = useMemo(
+    () => buildYearHeatmap(history, preferences.lthr ?? null, new Date().getFullYear()),
+    [history, preferences.lthr],
+  );
+  const annualGoalProgress = useMemo(
+    () => computeAnnualGoal(history, preferences.annualGoalKm ?? 0),
+    [history, preferences.annualGoalKm],
+  );
+  const readinessStatus = useMemo(() => computeReadiness(history), [history]);
+
+  const latestLoadPoint = trainingLoadSeries[trainingLoadSeries.length - 1];
+  const monthAgoLoadPoint = trainingLoadSeries[trainingLoadSeries.length - 29] ?? trainingLoadSeries[0];
+  const ctlTrend = latestLoadPoint && monthAgoLoadPoint ? latestLoadPoint.ctl - monthAgoLoadPoint.ctl : 0;
+
+  const readinessMeta = readinessStatus
+    ? readinessStatus.status === 'ready'
+      ? { color: '#34c759', label: lang === 'ru' ? 'Готов к нагрузке' : 'Ready to train' }
+      : readinessStatus.status === 'normal'
+        ? { color: '#ff9500', label: lang === 'ru' ? 'Норма' : 'Normal' }
+        : { color: '#ff3b30', label: lang === 'ru' ? 'Восстановление' : 'Recovering' }
+    : null;
+
+  const tsbHint = !latestLoadPoint
+    ? ''
+    : latestLoadPoint.tsb > 5
+      ? lang === 'ru'
+        ? 'Ноги свежие — хорошее окно для старта или тяжёлой работы.'
+        : 'Legs are fresh — a good window for racing or hard work.'
+      : latestLoadPoint.tsb < -30
+        ? lang === 'ru'
+          ? 'Высокая усталость — держите лёгкий объём и высыпайтесь.'
+          : 'High fatigue — keep easy volume and sleep more.'
+        : lang === 'ru'
+          ? 'Баланс нагрузки и восстановления в рабочем диапазоне.'
+          : 'Load and recovery are in a working range.';
+
+  const heatmapMonthLabels = (() => {
+    const monthNames = lang === 'ru'
+      ? ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек']
+      : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const labels: Array<{ name: string; column: number }> = [];
+    yearHeatmap.forEach((week, index) => {
+      const firstOfMonth = week.find((cell) => cell.inYear && cell.dateKey.endsWith('-01'));
+      if (!firstOfMonth) return;
+      const name = monthNames[Number(firstOfMonth.dateKey.slice(5, 7)) - 1];
+      if (!labels.some((label) => label.name === name)) {
+        labels.push({ name, column: index + 1 });
+      }
+    });
+    return labels;
+  })();
+
+  const heatmapColor = (load: number) =>
+    load === 0
+      ? 'rgba(255,255,255,0.05)'
+      : load < 20
+        ? '#0e3b20'
+        : load < 45
+          ? '#196e35'
+          : load < 80
+            ? '#2ea043'
+            : '#56d364';
 
   const {
     aiResponse,
@@ -1604,6 +1682,195 @@ export default function Home() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+              {[
+                { label: lang === 'ru' ? 'Серия дней' : 'Day streak', value: streakStats.dayCurrent, hint: lang === 'ru' ? 'Тренировки подряд, считая сегодняшнюю или вчерашнюю' : 'Consecutive training days, counting today or yesterday', color: '#ff9500' },
+                { label: lang === 'ru' ? 'Рекорд серии (дни)' : 'Best day streak', value: streakStats.dayLongest, hint: lang === 'ru' ? 'Самая длинная серия дней в истории' : 'Longest daily streak ever', color: '#ffcc00' },
+                { label: lang === 'ru' ? 'Серия недель' : 'Week streak', value: streakStats.weekCurrent, hint: lang === 'ru' ? 'Недели подряд с хотя бы одной тренировкой' : 'Consecutive weeks with at least one workout', color: '#34c759' },
+                { label: lang === 'ru' ? 'Рекорд (недели)' : 'Best week streak', value: streakStats.weekLongest, hint: lang === 'ru' ? 'Самая длинная серия активных недель' : 'Longest streak of active weeks', color: '#5ac8fa' },
+              ].map((item) => (
+                <div key={item.label} className="premium-card" title={item.hint}>
+                  <p className="secondary-text" style={{ fontSize: '0.8rem', marginBottom: '8px' }}>{item.label}</p>
+                  <h2 style={{ color: item.color }}>{item.value}</h2>
+                </div>
+              ))}
+            </div>
+
+            <div className="premium-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '12px' }}>
+                <h3>{lang === 'ru' ? 'Тренировочная форма (CTL / ATL / TSB)' : 'Training Form (CTL / ATL / TSB)'}</h3>
+                <div style={{ display: 'flex', gap: '16px', fontSize: '0.85rem' }}>
+                  <span><span style={{ color: '#34c759', fontWeight: 700 }}>●</span> CTL {latestLoadPoint ? Math.round(latestLoadPoint.ctl) : '—'}</span>
+                  <span><span style={{ color: '#ff9500', fontWeight: 700 }}>●</span> ATL {latestLoadPoint ? Math.round(latestLoadPoint.atl) : '—'}</span>
+                  <span><span style={{ color: '#af52de', fontWeight: 700 }}>●</span> TSB {latestLoadPoint ? Math.round(latestLoadPoint.tsb) : '—'}</span>
+                </div>
+              </div>
+              <p className="secondary-text" style={{ fontSize: '0.8rem', margin: '8px 0 16px' }}>
+                {lang === 'ru'
+                  ? 'CTL — накопленная форма (42 дня), ATL — свежая усталость (7 дней), TSB — их разница. Нагрузка считается по пульсу относительно порогового, если он задан в настройках.'
+                  : 'CTL is long-term fitness (42 days), ATL is fresh fatigue (7 days), TSB is the difference. Load is heart-rate based when an LTHR is set in Settings.'}
+              </p>
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={trainingLoadSeries} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                  <XAxis
+                    dataKey="date"
+                    stroke="rgba(255,255,255,0.35)"
+                    tick={{ fontSize: 11 }}
+                    tickFormatter={(value: string) => value.slice(5).replace('-', '.')}
+                    interval="preserveStartEnd"
+                    minTickGap={48}
+                  />
+                  <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 11 }} width={40} />
+                  <Tooltip
+                    contentStyle={{ background: '#10161f', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, fontSize: '0.85rem' }}
+                    formatter={(value, name) => [Math.round(Number(value)), String(name)]}
+                  />
+                  <Area type="monotone" dataKey="ctl" stroke="#34c759" strokeWidth={2} fill="#34c759" fillOpacity={0.08} name="CTL" dot={false} />
+                  <Area type="monotone" dataKey="atl" stroke="#ff9500" strokeWidth={2} fill="#ff9500" fillOpacity={0.08} name="ATL" dot={false} />
+                  <Area type="monotone" dataKey="tsb" stroke="#af52de" strokeWidth={2} fill="none" name="TSB" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+              <p style={{ fontSize: '0.85rem', marginTop: '12px' }}>
+                {lang === 'ru' ? 'Форма за месяц: ' : 'Fitness over the month: '}
+                <span style={{ color: ctlTrend > 2 ? '#34c759' : ctlTrend < -2 ? '#ff3b30' : '#ff9500', fontWeight: 700 }}>
+                  {ctlTrend > 2 ? (lang === 'ru' ? 'растёт' : 'rising') : ctlTrend < -2 ? (lang === 'ru' ? 'снижается' : 'falling') : (lang === 'ru' ? 'держится' : 'steady')}
+                </span>
+                {' · '}
+                {tsbHint}
+              </p>
+            </div>
+
+            <div className="premium-card">
+              <h3 style={{ marginBottom: '4px' }}>{lang === 'ru' ? `Активность ${new Date().getFullYear()}` : `Activity ${new Date().getFullYear()}`}</h3>
+              <p className="secondary-text" style={{ fontSize: '0.8rem', marginBottom: '16px' }}>
+                {lang === 'ru' ? 'Цвет дня — суммарная нагрузка (TSS) за него. Наведите курсор для деталей.' : 'Cell colour shows the day’s total load (TSS). Hover for details.'}
+              </p>
+              <div style={{ display: 'flex', overflowX: 'auto', paddingBottom: '4px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginRight: '6px', paddingTop: '18px' }}>
+                  {(lang === 'ru' ? ['', 'Пн', '', 'Ср', '', 'Пт', ''] : ['', 'Mon', '', 'Wed', '', 'Fri', '']).map((label, index) => (
+                    <span key={index} style={{ height: '11px', lineHeight: '11px', fontSize: '9px', color: 'rgba(255,255,255,0.35)', width: '22px' }}>{label}</span>
+                  ))}
+                </div>
+                <div>
+                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${yearHeatmap.length}, 11px)`, gap: '3px', marginBottom: '4px', fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>
+                    {heatmapMonthLabels.map((label) => (
+                      <span key={label.name} style={{ gridColumnStart: label.column }}>{label.name}</span>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: '3px' }}>
+                    {yearHeatmap.map((week) => (
+                      <div key={week[0].dateKey} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                        {week.map((cell) => (
+                          <div
+                            key={cell.dateKey}
+                            title={cell.inYear ? `${cell.dateKey} · ${cell.load} TSS · ${cell.distanceKm} км` : ''}
+                            style={{
+                              width: '11px',
+                              height: '11px',
+                              borderRadius: '2px',
+                              background: heatmapColor(cell.load),
+                              opacity: cell.inYear ? 1 : 0,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '12px', fontSize: '0.75rem', color: 'rgba(255,255,255,0.45)' }}>
+                <span>{lang === 'ru' ? 'Меньше' : 'Less'}</span>
+                {[0, 10, 30, 60, 100].map((load) => (
+                  <span key={load} style={{ width: '11px', height: '11px', borderRadius: '2px', background: heatmapColor(load) }} />
+                ))}
+                <span>{lang === 'ru' ? 'Больше' : 'More'}</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div className="premium-card">
+                <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Цель года' : 'Annual Goal'}</h3>
+                {annualGoalProgress ? (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
+                      <h2>{annualGoalProgress.doneKm} <span className="secondary-text" style={{ fontSize: '1rem' }}>/ {annualGoalProgress.goalKm} {lang === 'ru' ? 'км' : 'km'}</span></h2>
+                      <span style={{ fontWeight: 700, color: annualGoalProgress.onTrack ? '#34c759' : '#ff9500' }}>{annualGoalProgress.percent}%</span>
+                    </div>
+                    <div style={{ height: '10px', borderRadius: '999px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden', marginBottom: '14px' }}>
+                      <div style={{ width: `${annualGoalProgress.percent}%`, height: '100%', background: annualGoalProgress.onTrack ? '#34c759' : '#ff9500' }} />
+                    </div>
+                    <p className="secondary-text" style={{ fontSize: '0.85rem', lineHeight: 1.7 }}>
+                      {lang === 'ru'
+                        ? `Осталось ${annualGoalProgress.daysLeft} ${annualGoalProgress.daysLeft % 10 === 1 && annualGoalProgress.daysLeft % 100 !== 11 ? 'день' : 'дней'}. Нужно около ${annualGoalProgress.neededPerWeek} км в неделю.`
+                        : `${annualGoalProgress.daysLeft} days left. About ${annualGoalProgress.neededPerWeek} km per week needed.`}
+                      <br />
+                      {lang === 'ru'
+                        ? `Темп последних 4 недель: ${annualGoalProgress.recentWeeklyKm} км/нед → прогноз ${annualGoalProgress.projectedKm} км.`
+                        : `Recent pace: ${annualGoalProgress.recentWeeklyKm} km/week → projected ${annualGoalProgress.projectedKm} km.`}
+                      <br />
+                      <span style={{ color: annualGoalProgress.onTrack ? '#34c759' : '#ff9500', fontWeight: 600 }}>
+                        {annualGoalProgress.onTrack
+                          ? (lang === 'ru' ? 'Цель по силам при текущем темпе.' : 'On track at the current pace.')
+                          : (lang === 'ru' ? 'При текущем темпе цель не будет достигнута.' : 'The goal will be missed at the current pace.')}
+                      </span>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="secondary-text" style={{ fontSize: '0.9rem', lineHeight: 1.7, marginBottom: '16px' }}>
+                      {lang === 'ru'
+                        ? 'Задайте годовую цель по километрам — здесь появится прогресс, необходимый недельный темп и прогноз.'
+                        : 'Set an annual distance goal — progress, the required weekly pace and a projection will appear here.'}
+                    </p>
+                    <button
+                      onClick={() => setActiveTab('settings')}
+                      style={{ background: '#007aff', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      {lang === 'ru' ? 'Задать цель в настройках' : 'Set goal in Settings'}
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div className="premium-card">
+                <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Готовность (HRV)' : 'Readiness (HRV)'}</h3>
+                {readinessStatus && readinessMeta ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', marginBottom: '12px' }}>
+                      <h2 style={{ color: readinessMeta.color }}>{readinessStatus.hrvIndex}%</h2>
+                      <span style={{ color: readinessMeta.color, fontWeight: 700 }}>{readinessMeta.label}</span>
+                    </div>
+                    <p className="secondary-text" style={{ fontSize: '0.85rem', lineHeight: 1.7 }}>
+                      {lang === 'ru'
+                        ? `HRV за 7 дней: ${readinessStatus.recentHrv} мс против базы 28 дней ${readinessStatus.baselineHrv} мс.`
+                        : `7-day HRV: ${readinessStatus.recentHrv} ms vs the 28-day baseline ${readinessStatus.baselineHrv} ms.`}
+                      {readinessStatus.restHrDelta !== null && (
+                        <>
+                          <br />
+                          {lang === 'ru'
+                            ? `Пульс покоя: ${readinessStatus.restHrDelta > 0 ? '+' : ''}${readinessStatus.restHrDelta} уд/мин к базе.`
+                            : `Resting pulse: ${readinessStatus.restHrDelta > 0 ? '+' : ''}${readinessStatus.restHrDelta} bpm vs baseline.`}
+                        </>
+                      )}
+                      <br />
+                      {readinessStatus.status === 'ready'
+                        ? (lang === 'ru' ? 'Восстановление в норме — можно смело планировать тяжёлую тренировку или старт.' : 'Recovery looks good — a hard session or race is reasonable.')
+                        : readinessStatus.status === 'normal'
+                          ? (lang === 'ru' ? 'Обычный режим: держите план, следите за самочувствием.' : 'Normal mode: stick to the plan and watch how you feel.')
+                          : (lang === 'ru' ? 'ОРГАНИЗМ ЕЩЁ НЕ ВОССТАНОВИЛСЯ — сегодня лучше лёгкий бег или отдых.' : 'NOT FULLY RECOVERED — prefer an easy run or rest today.')}
+                    </p>
+                  </>
+                ) : (
+                  <p className="secondary-text" style={{ fontSize: '0.9rem', lineHeight: 1.7 }}>
+                    {lang === 'ru'
+                      ? 'Недостаточно замеров HRV: для оценки готовности нужно минимум 5 тренировок с пульсом за последние 4 недели (синхронизация с Apple Здоровье).'
+                      : 'Not enough HRV samples: readiness needs at least 5 workouts with heart rate in the last 4 weeks (sync from Apple Health).'}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -3219,6 +3486,60 @@ export default function Home() {
                         />
                         <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '6px' }}>
                            {lang === 'ru' ? 'Например: 5.0 для темпа 5:00/км. Используется AI-тренером.' : 'Example: 5.0 for 5:00/km pace. Used by the AI coach.'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="secondary-text" style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem' }}>
+                          {lang === 'ru' ? 'Пороговый пульс (LTHR)' : 'Lactate Threshold HR (LTHR)'}
+                        </label>
+                        <input
+                          type="number"
+                          value={preferences.lthr ?? ''}
+                          placeholder="170"
+                          onChange={(e) => setPreferences({
+                            ...preferences,
+                            lthr: e.target.value ? Number.parseInt(e.target.value, 10) || null : null
+                          })}
+                          style={{
+                            width: '100%',
+                            padding: '12px 14px',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            background: 'rgba(255,255,255,0.04)',
+                            color: '#f5f7fb',
+                            fontSize: '0.95rem',
+                            outline: 'none'
+                          }}
+                        />
+                        <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '6px' }}>
+                           {lang === 'ru' ? 'Включает расчёт тренировочной формы и готовности по пульсу. Не знаете — оставьте пустым.' : 'Enables heart-rate based training form and readiness. Leave empty if unknown.'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="secondary-text" style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem' }}>
+                          {lang === 'ru' ? 'Годовая цель (км)' : 'Annual goal (km)'}
+                        </label>
+                        <input
+                          type="number"
+                          step="50"
+                          value={preferences.annualGoalKm ?? 0}
+                          onChange={(e) => setPreferences({
+                            ...preferences,
+                            annualGoalKm: Number.parseFloat(e.target.value) || 0
+                          })}
+                          style={{
+                            width: '100%',
+                            padding: '12px 14px',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            background: 'rgba(255,255,255,0.04)',
+                            color: '#f5f7fb',
+                            fontSize: '0.95rem',
+                            outline: 'none'
+                          }}
+                        />
+                        <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '6px' }}>
+                           {lang === 'ru' ? 'Прогресс и прогноз отображаются во вкладке «Индекс формы».' : 'Progress and projection appear on the Fitness Index tab.'}
                         </p>
                       </div>
                     </div>

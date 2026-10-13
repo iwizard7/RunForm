@@ -101,6 +101,10 @@ export type UserPreferences = {
     z5: number;
   };
   thresholdPace: number; // minutes per km
+  /** Lactate-threshold HR — drives HR-based training load; null = not set. */
+  lthr?: number | null;
+  /** Annual distance goal in kilometers; 0 = not set. */
+  annualGoalKm?: number;
 };
 
 export const defaultPreferences: UserPreferences = {
@@ -112,6 +116,8 @@ export const defaultPreferences: UserPreferences = {
     z5: 185,
   },
   thresholdPace: 5.0, // 5:00 min/km
+  lthr: null,
+  annualGoalKm: 0,
 };
 
 // The `prefs` argument is kept for API compatibility: personalised zones are

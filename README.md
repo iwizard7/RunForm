@@ -364,7 +364,11 @@ npm run build
 
 ## Changelog
 
-### v0.10.1 (Latest)
+### v0.11.0 (Latest)
+- **Training form**: the Fitness Index tab now shows CTL/ATL/TSB — the classic training-form chart (chronic fitness, acute fatigue and their balance) computed from heart rate against your lactate-threshold HR, or from workout intensity when no threshold is set. Also added day/week streaks with personal records, a GitHub-style yearly activity heatmap, an annual distance goal with progress and a projection from your recent pace, and an HRV readiness score with a resting-pulse shift. Everything is calculated locally from your existing history.
+- **Settings**: two new fields — Lactate Threshold HR (enables heart-rate based form and readiness) and the annual distance goal in kilometers.
+
+### v0.10.1
 - **Self-contained backup files**: creating a backup now checkpoints and normalizes the journal, so each snapshot is a single `.db` file without WAL/SHM sidecars — safe to copy or archive as-is.
 
 ### v0.10.0
