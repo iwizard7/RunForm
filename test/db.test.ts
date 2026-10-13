@@ -26,6 +26,14 @@ import {
   updateWorkoutTags,
 } from '@/lib/actions';
 import { parseWorkoutJSON } from '@/lib/parser';
+import {
+  backupsDir,
+  createBackup,
+  listBackups,
+  restoreBackup,
+  sanitizeBackupFileName,
+  validateBackupFile,
+} from '@/lib/backup';
 import { assert, assertEqual, group, summarize, test } from './harness';
 
 /**
@@ -334,6 +342,91 @@ export async function runDatabaseSuite(): Promise<void> {
     await clearChatMessages();
     const messages = await getChatMessages();
     assertEqual(messages.length, 0, 'chat cleared');
+  });
+
+  group('database: backups');
+
+  test('backup file names cannot escape the backups directory', () => {
+    assertEqual(
+      sanitizeBackupFileName('runform-backup-2026-10-13T210000.db'),
+      'runform-backup-2026-10-13T210000.db',
+      'plain backup name accepted',
+    );
+    assertEqual(sanitizeBackupFileName('../escape.db'), null, 'parent traversal rejected');
+    assertEqual(sanitizeBackupFileName('sub/dir.db'), null, 'nested path rejected');
+    assertEqual(sanitizeBackupFileName('evil.exe'), null, 'non-db extension rejected');
+    assertEqual(sanitizeBackupFileName('.hidden.db'), null, 'hidden file rejected');
+    assertEqual(sanitizeBackupFileName(''), null, 'empty name rejected');
+    assertEqual(sanitizeBackupFileName(null), null, 'non-string rejected');
+  });
+
+  test('createBackup writes a verifiable snapshot', async () => {
+    const before = db.prepare('SELECT COUNT(*) AS count FROM workouts').get() as { count: number };
+
+    const entry = await createBackup(dataDir);
+    assert(entry.fileName.endsWith('.db'), 'backup file has a .db extension');
+    assert(entry.sizeBytes > 0, 'backup file is not empty');
+
+    const listed = listBackups(dataDir).some((item) => item.fileName === entry.fileName);
+    assertEqual(listed, true, 'backup shows up in the listing');
+
+    const validation = validateBackupFile(path.join(backupsDir(dataDir), entry.fileName));
+    assertEqual(validation.valid, true, 'backup passes the integrity check');
+    assertEqual(validation.workouts, before.count, 'snapshot keeps the workout count');
+  });
+
+  test('restoreBackup brings back replaced data and saves a safety copy', async () => {
+    const before = db.prepare('SELECT COUNT(*) AS count FROM workouts').get() as { count: number };
+
+    await saveWorkout(parseWorkoutJSON({ ...baseWorkout, uuid: 'test-backup-extra' }));
+    const backup = await createBackup(dataDir);
+
+    await clearAllWorkouts();
+    const cleared = db.prepare('SELECT COUNT(*) AS count FROM workouts').get() as { count: number };
+    assertEqual(cleared.count, 0, 'database emptied before the restore');
+
+    const result = await restoreBackup(dataDir, backup.fileName);
+    assertEqual(result.restoredWorkouts, before.count + 1, 'workout count restored');
+
+    const restored = db
+      .prepare('SELECT COUNT(*) AS count FROM workouts WHERE uuid = ?')
+      .get('test-backup-extra') as { count: number };
+    assertEqual(restored.count, 1, 'the extra workout is back after the restore');
+
+    const names = listBackups(dataDir).map((entry) => entry.fileName);
+    assert(
+      names.some((name) => name.includes('prerestore')),
+      'a safety copy of the pre-restore state was created',
+    );
+  });
+
+  test('restoreBackup refuses files that are not RunForm databases', async () => {
+    fs.mkdirSync(backupsDir(dataDir), { recursive: true });
+    const garbage = path.join(backupsDir(dataDir), 'garbage.db');
+    fs.writeFileSync(garbage, 'not a database at all');
+    const before = db.prepare('SELECT COUNT(*) AS count FROM workouts').get() as { count: number };
+
+    let threw = false;
+    try {
+      await restoreBackup(dataDir, 'garbage.db');
+    } catch {
+      threw = true;
+    }
+    assertEqual(threw, true, 'invalid backup rejected');
+
+    const after = db.prepare('SELECT COUNT(*) AS count FROM workouts').get() as { count: number };
+    assertEqual(after.count, before.count, 'database untouched after the rejected restore');
+    fs.rmSync(garbage, { force: true });
+  });
+
+  test('restoreBackup rejects traversal names even when the file exists', async () => {
+    let threw = false;
+    try {
+      await restoreBackup(dataDir, '../workouts.db');
+    } catch {
+      threw = true;
+    }
+    assertEqual(threw, true, 'path traversal name rejected');
   });
 
   return summarize('database/actions suite');

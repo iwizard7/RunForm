@@ -7,7 +7,7 @@ import { resolveDataDir } from './data-dir';
 //   RUNFORM_DATA_DIR wins, then <cwd>/data, then a platform user-data folder
 //   (needed for packaged builds where the bundle directory is read-only).
 const resolvedDataDir = resolveDataDir();
-const DB_DIR = resolvedDataDir.dir;
+export const DB_DIR = resolvedDataDir.dir;
 const DB_PATH = path.join(DB_DIR, 'workouts.db');
 
 console.log(`[RunForm] DB path: ${DB_PATH} (source: ${resolvedDataDir.source})`);

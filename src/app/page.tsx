@@ -1,7 +1,7 @@
 "use client";
 
 import NextImage from 'next/image';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   History as HistoryIcon,
@@ -66,6 +66,9 @@ import { buildHomeMetrics, formatTime, getDateKey } from '@/lib/home-metrics';
 import { computeWorkoutSplits, formatSplitPace } from '@/lib/splits';
 import { formatVersionLabel } from '@/lib/app-version';
 import { formatPersonalBest, getTierDistance, PersonalBestType } from '@/lib/personal-best';
+// Type-only: keeps the Node-side backup module (better-sqlite3) out of the
+// client bundle while sharing the exact shapes with the server actions.
+import type { BackupEntry, DatabaseInfo } from '@/lib/backup';
 import { useWorkoutData } from '@/hooks/useWorkoutData';
 import { useRunFormData } from '@/hooks/useRunFormData';
 import { useAiCoach } from '@/hooks/useAiCoach';
@@ -159,6 +162,11 @@ export default function Home() {
   const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
   const [routeNameDraft, setRouteNameDraft] = useState('');
   const [planNotice, setPlanNotice] = useState<string | null>(null);
+  const [dbInfo, setDbInfo] = useState<DatabaseInfo | null>(null);
+  const [backupList, setBackupList] = useState<BackupEntry[]>([]);
+  const [backupNotice, setBackupNotice] = useState<string | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const backupFileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [lang, setLang] = useState<Language>(() => {
     if (typeof window === 'undefined') {
@@ -492,6 +500,120 @@ export default function Home() {
       cancelled = true;
     };
   }, [isClient]);
+
+  // Панель резервных копий (Настройки): снимок текущей базы + файлы из
+  // data/backups. Грузится один раз; после каждого действия список обновляется.
+  const loadBackupPanel = useCallback(async () => {
+    try {
+      const actions = await import('@/lib/actions');
+      const [info, list] = await Promise.all([
+        actions.getDatabaseInfo(),
+        actions.listDatabaseBackups(),
+      ]);
+      setDbInfo(info);
+      setBackupList(list);
+    } catch {
+      // Панель необязательная: сбой чтения не должен ломать весь экран Настроек.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isClient) return;
+    void loadBackupPanel();
+  }, [isClient, loadBackupPanel]);
+
+  const showBackupNotice = useCallback((text: string) => {
+    setBackupNotice(text);
+    window.setTimeout(() => setBackupNotice(null), 6000);
+  }, []);
+
+  const describeError = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+  const handleCreateBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const { createDatabaseBackup } = await import('@/lib/actions');
+      const entry = await createDatabaseBackup();
+      showBackupNotice(
+        lang === 'ru'
+          ? `Резервная копия создана: ${entry.fileName}`
+          : `Backup created: ${entry.fileName}`,
+      );
+      await loadBackupPanel();
+    } catch (error) {
+      showBackupNotice(
+        lang === 'ru'
+          ? `Не удалось создать копию: ${describeError(error)}`
+          : `Backup failed: ${describeError(error)}`,
+      );
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const handleBackupFileChosen = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.target;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    setBackupBusy(true);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const response = await fetch('/api/backup', { method: 'POST', body });
+      const data = (await response.json()) as {
+        success?: boolean;
+        fileName?: string;
+        workouts?: number;
+        error?: string;
+      };
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? `HTTP ${response.status}`);
+      }
+      showBackupNotice(
+        lang === 'ru'
+          ? `Файл загружен: ${data.fileName} (${data.workouts ?? 0} тренировок). Нажмите «Восстановить», чтобы применить.`
+          : `File uploaded: ${data.fileName} (${data.workouts ?? 0} workouts). Press Restore to apply it.`,
+      );
+      await loadBackupPanel();
+    } catch (error) {
+      showBackupNotice(
+        lang === 'ru'
+          ? `Не удалось загрузить файл: ${describeError(error)}`
+          : `Upload failed: ${describeError(error)}`,
+      );
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const handleRestoreBackup = async (fileName: string) => {
+    const question =
+      lang === 'ru'
+        ? `Восстановить базу из копии «${fileName}»? Текущие данные будут заменены (сначала сохранится страховочная копия).`
+        : `Restore the database from «${fileName}»? Current data will be replaced (a safety copy is saved first).`;
+    if (!confirm(question)) return;
+
+    setBackupBusy(true);
+    try {
+      const { restoreDatabaseBackup } = await import('@/lib/actions');
+      const result = await restoreDatabaseBackup(fileName);
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+      // Все экраны читают данные через одни и те же server actions, поэтому
+      // перезагрузка — самый надёжный способ показать восстановленную базу.
+      window.location.reload();
+    } catch (error) {
+      setBackupBusy(false);
+      showBackupNotice(
+        lang === 'ru'
+          ? `Восстановление не удалось: ${describeError(error)}`
+          : `Restore failed: ${describeError(error)}`,
+      );
+    }
+  };
 
   const persistModelChoice = (
     key: 'runform.aiModel' | 'runform.aiVisionModel',
@@ -3207,6 +3329,87 @@ export default function Home() {
                         <span>{lang === 'ru' ? 'Версия' : 'Version'}</span>
                           <span className="secondary-text">{formatVersionLabel()}</span>
                     </div>
+                </div>
+                <div className="premium-card">
+                    <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Резервные копии базы' : 'Database Backups'}</h3>
+                    {dbInfo && (
+                      <p className="secondary-text" style={{ fontSize: '0.78rem', marginBottom: '14px', wordBreak: 'break-all' }}>
+                        {lang === 'ru' ? 'База: ' : 'Database: '}{dbInfo.path}
+                        {' · '}{(dbInfo.sizeBytes / 1024).toFixed(0)} KB
+                        {' · '}{dbInfo.workouts} {lang === 'ru' ? 'тренировок' : 'workouts'}
+                      </p>
+                    )}
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={handleCreateBackup}
+                        disabled={backupBusy}
+                        style={{ background: '#007aff', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '10px', cursor: backupBusy ? 'wait' : 'pointer', fontWeight: 600, opacity: backupBusy ? 0.6 : 1 }}
+                      >
+                        {lang === 'ru' ? 'Создать копию' : 'Create backup'}
+                      </button>
+                      <button
+                        onClick={() => backupFileInputRef.current?.click()}
+                        disabled={backupBusy}
+                        style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', padding: '10px 18px', borderRadius: '10px', cursor: backupBusy ? 'wait' : 'pointer', opacity: backupBusy ? 0.6 : 1 }}
+                      >
+                        {lang === 'ru' ? 'Загрузить файл…' : 'Upload file…'}
+                      </button>
+                      <input
+                        ref={backupFileInputRef}
+                        type="file"
+                        accept=".db,application/x-sqlite3"
+                        style={{ display: 'none' }}
+                        onChange={handleBackupFileChosen}
+                      />
+                    </div>
+                    {backupNotice && (
+                      <p style={{ color: '#34c759', fontSize: '0.85rem', marginBottom: '12px' }}>{backupNotice}</p>
+                    )}
+                    {backupList.length === 0 ? (
+                      <p className="secondary-text" style={{ fontSize: '0.85rem' }}>
+                        {lang === 'ru'
+                          ? 'Копий пока нет. Создайте первую — она сохранится в папке data/backups рядом с базой.'
+                          : 'No backups yet. Create the first one — it is stored in data/backups next to the database.'}
+                      </p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {backupList.map((entry) => (
+                          <div
+                            key={entry.fileName}
+                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.04)', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)' }}
+                          >
+                            <div style={{ minWidth: 0 }}>
+                              <p style={{ margin: 0, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.fileName}</p>
+                              <p className="secondary-text" style={{ margin: '2px 0 0', fontSize: '0.75rem' }}>
+                                {new Date(entry.createdAt).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US')}
+                                {' · '}{(entry.sizeBytes / 1024).toFixed(0)} KB
+                                {' · '}{entry.workouts < 0 ? '?' : entry.workouts} {lang === 'ru' ? 'тренировок' : 'workouts'}
+                              </p>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                              <a
+                                href={`/api/backup?file=${encodeURIComponent(entry.fileName)}`}
+                                style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', padding: '6px 12px', borderRadius: '8px', textDecoration: 'none', fontSize: '0.85rem' }}
+                              >
+                                {lang === 'ru' ? 'Скачать' : 'Download'}
+                              </a>
+                              <button
+                                onClick={() => handleRestoreBackup(entry.fileName)}
+                                disabled={backupBusy}
+                                style={{ background: 'transparent', border: '1px solid rgba(255, 149, 0, 0.4)', color: '#ff9500', padding: '6px 12px', borderRadius: '8px', cursor: backupBusy ? 'wait' : 'pointer', fontSize: '0.85rem', opacity: backupBusy ? 0.6 : 1 }}
+                              >
+                                {lang === 'ru' ? 'Восстановить' : 'Restore'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '12px' }}>
+                      {lang === 'ru'
+                        ? 'Копия — это снимок всей базы: тренировки, кроссовки, планы, чат и здоровье. Восстановление сначала сохраняет страховочную копию текущего состояния, поэтому его всегда можно отменить.'
+                        : 'A backup is a snapshot of the whole database: workouts, shoes, plans, chat and health entries. Restoring saves a safety copy of the current state first, so it is always undoable.'}
+                    </p>
                 </div>
                 <button 
                     onClick={async () => { if (confirm(lang === 'ru' ? 'Вы уверены? Это сотрет все данные.' : 'Are you sure? This will delete all data.')) { await resetWorkouts(); setActiveTab('dashboard'); } }}

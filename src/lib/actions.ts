@@ -1,10 +1,18 @@
 'use server';
 
-import db from './db';
+import db, { DB_DIR } from './db';
 import { WorkoutData } from './parser';
 import { buildPersonalBestCandidates, selectImprovedRecords } from './personal-best';
 import { computeRouteFingerprint } from './routes';
 import { getWorkoutCondition } from './workout-condition';
+import {
+  createBackup,
+  getDatabaseInfo as readDatabaseInfo,
+  listBackups,
+  restoreBackup,
+  type BackupEntry,
+  type DatabaseInfo,
+} from './backup';
 
 interface WorkoutRow {
   uuid: string;
@@ -261,6 +269,40 @@ export async function clearAllWorkouts() {
   deleteAllWorkoutsStatement.run();
   await updateShoeDistance();
   return { success: true };
+}
+
+// === Database Backup & Restore ===
+
+/**
+ * Takes a consistent snapshot of the whole database into `<dataDir>/backups/`.
+ */
+export async function createDatabaseBackup(): Promise<BackupEntry> {
+  return createBackup(DB_DIR);
+}
+
+export async function listDatabaseBackups(): Promise<BackupEntry[]> {
+  return listBackups(DB_DIR);
+}
+
+/** Path, size and row counts of the live database for the Settings panel. */
+export async function getDatabaseInfo(): Promise<DatabaseInfo> {
+  return readDatabaseInfo(DB_DIR);
+}
+
+/**
+ * Restores a backup by name from the backups directory. A safety snapshot of
+ * the current state is created first; failures return `success: false`
+ * without touching the database.
+ */
+export async function restoreDatabaseBackup(
+  fileName: string,
+): Promise<{ success: true; restoredWorkouts: number; safetyBackup: string } | { success: false; error: string }> {
+  try {
+    const result = await restoreBackup(DB_DIR, fileName);
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 // === Equipment Tracker (Shoes) ===
