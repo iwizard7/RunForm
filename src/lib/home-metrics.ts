@@ -14,6 +14,7 @@ import {
 } from '@/lib/ai';
 import { WorkoutData } from '@/lib/parser';
 import { translations, Language } from '@/lib/translations';
+import { getWorkoutCondition } from '@/lib/workout-condition';
 
 export type ChartDatum = {
   name: string;
@@ -319,8 +320,11 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
   const currentBestPaceMinutes = bestWorkoutAllTime ? parsePaceToMinutes(bestWorkoutAllTime.pace) : null;
   const monthlyDistanceProgress = Math.min(100, Math.round((monthDistance / monthlyDistanceGoal) * 100));
   const monthlyWorkoutProgress = Math.min(100, Math.round((currentMonthWorkoutsCount / monthlyWorkoutGoal) * 100));
-  const avgHrProgress = history.length > 0
-    ? Math.max(0, Math.min(100, Math.round((avgHrGoal / Math.max(1, monthAvgHr || avgHrGoal)) * 100)))
+  // Progress only counts when the current month actually has HR data: with an
+  // empty month `monthAvgHr` is 0 and the old formula (goal / (monthAvgHr ||
+  // goal)) reported 100% — the goal looked achieved with no workouts at all.
+  const avgHrProgress = monthWorkoutEntries.length > 0 && monthAvgHr > 0
+    ? Math.max(0, Math.min(100, Math.round((avgHrGoal / Math.max(1, monthAvgHr)) * 100)))
     : 0;
   const paceGoalProgress = currentBestPaceMinutes
     ? Math.max(0, Math.min(100, Math.round((paceGoalMinutes / currentBestPaceMinutes) * 100)))
@@ -424,8 +428,8 @@ export function buildHomeMetrics(params: HomeMetricsParams) {
     return { temperature, humidity, stress, label };
   })();
 
-  const indoorWorkouts = history.filter((item) => (item.location ?? '').toLowerCase() === 'indoor');
-  const outdoorWorkouts = history.filter((item) => (item.location ?? '').toLowerCase() === 'outdoor');
+  const indoorWorkouts = history.filter((item) => getWorkoutCondition(item.location) === 'indoor');
+  const outdoorWorkouts = history.filter((item) => getWorkoutCondition(item.location) === 'outdoor');
   const dominantLocation = indoorWorkouts.length >= outdoorWorkouts.length
     ? (lang === 'ru' ? 'Indoor-профиль доминирует' : 'Indoor profile dominates')
     : (lang === 'ru' ? 'Outdoor-профиль доминирует' : 'Outdoor profile dominates');

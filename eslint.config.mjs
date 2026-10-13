@@ -12,7 +12,17 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Compiled output of `npm run test:logic` (tsconfig.test.json outDir):
+    ".test-build/**",
   ]),
+  {
+    // The node-based test launchers are plain CommonJS files; require() is
+    // the correct module system there.
+    files: ["test/**/*.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

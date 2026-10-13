@@ -39,9 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+/.test-build/
 
 # local workout exports
 workout_*.json
 
 # local app data
 /data/
+
+# generated knowledge graph
+/graphify-out/

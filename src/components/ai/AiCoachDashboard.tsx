@@ -1,7 +1,7 @@
 "use client";
 
 import { MetricExplainer, MetricExplainerKey, NextResultPrediction, WeeklyCoach, WorkoutAiReview, ExplainedFlag, formatPaceMinutes } from '@/lib/ai';
-import { Language } from '@/lib/translations';
+import { Language, translations } from '@/lib/translations';
 
 type Props = {
   lang: Language;
@@ -24,13 +24,14 @@ export function AiCoachDashboard({
   selectedMetricKey,
   onMetricSelect,
 }: Props) {
+  const t = translations[lang];
   const selectedMetricExplanation = metricExplainers.find((item) => item.key === selectedMetricKey) ?? metricExplainers[0];
 
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: '24px' }}>
         <div className="premium-card">
-          <p className="secondary-text" style={{ marginBottom: '8px' }}>{lang === 'ru' ? 'AI-разбор тренировки' : 'AI workout review'}</p>
+          <p className="secondary-text" style={{ marginBottom: '8px' }}>{t.dataDrivenReview}</p>
           <h3 style={{ marginBottom: '12px' }}>{workoutAiReview?.summary}</h3>
           {workoutAiReview && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -56,7 +57,7 @@ export function AiCoachDashboard({
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <div className="premium-card">
-            <p className="secondary-text" style={{ marginBottom: '8px' }}>{lang === 'ru' ? 'AI weekly coach' : 'AI weekly coach'}</p>
+            <p className="secondary-text" style={{ marginBottom: '8px' }}>{t.weeklyCoachTitle}</p>
             <h3 style={{ marginBottom: '10px', color: weeklyCoach?.color }}>{weeklyCoach?.headline}</h3>
             <p style={{ lineHeight: 1.6, marginBottom: '12px' }}>{weeklyCoach?.summary}</p>
             <p className="secondary-text" style={{ marginBottom: '8px' }}>{weeklyCoach?.focus}</p>
@@ -86,7 +87,7 @@ export function AiCoachDashboard({
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
         <div className="premium-card">
-          <p className="secondary-text" style={{ marginBottom: '8px' }}>{lang === 'ru' ? 'AI-объяснение красных флагов' : 'AI red-flag explanations'}</p>
+          <p className="secondary-text" style={{ marginBottom: '8px' }}>{t.flagExplanations}</p>
           {explainedFlags.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               {explainedFlags.map((flag) => (
@@ -98,12 +99,12 @@ export function AiCoachDashboard({
               ))}
             </div>
           ) : (
-            <p style={{ lineHeight: 1.6 }}>{lang === 'ru' ? 'Сейчас явных красных флагов нет, поэтому AI не видит причин для защитной коррекции плана.' : 'There are no clear red flags right now, so AI does not see a need for defensive plan adjustments.'}</p>
+            <p style={{ lineHeight: 1.6 }}>{lang === 'ru' ? 'Сейчас явных красных флагов нет, поэтому защитная коррекция плана не требуется.' : 'There are no clear red flags right now, so no defensive plan adjustment is needed.'}</p>
           )}
         </div>
 
         <div className="premium-card">
-          <p className="secondary-text" style={{ marginBottom: '8px' }}>{lang === 'ru' ? 'AI объяснение показателей' : 'AI explain metrics'}</p>
+          <p className="secondary-text" style={{ marginBottom: '8px' }}>{t.metricExplanations}</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '16px' }}>
             {metricExplainers.map((item) => (
               <button

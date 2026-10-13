@@ -1,7 +1,7 @@
 "use client";
 
 import NextImage from 'next/image';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   History as HistoryIcon,
@@ -34,6 +34,16 @@ import {
   Tag,
   Plus,
   X,
+  Trophy,
+  CalendarCheck,
+  HeartPulse,
+  MapPinned,
+  Trash2,
+  Pencil,
+  Weight,
+  MessageCircle,
+  Camera,
+  Mic,
 } from 'lucide-react';
 import {
   PieChart,
@@ -50,19 +60,56 @@ import {
   Area,
 } from 'recharts';
 import { WorkoutData } from '@/lib/parser';
-import { getEfficiencyMetrics, getIntensityScore, MetricExplainerKey } from '@/lib/ai';
+import { getEfficiencyMetrics, getIntensityScore, MetricExplainerKey, parsePaceToMinutes } from '@/lib/ai';
 import { Language } from '@/lib/translations';
 import { buildHomeMetrics, formatTime, getDateKey } from '@/lib/home-metrics';
+import { computeWorkoutSplits, formatSplitPace } from '@/lib/splits';
+import { formatVersionLabel } from '@/lib/app-version';
+import { formatPersonalBest, getTierDistance, PersonalBestType } from '@/lib/personal-best';
 import { useWorkoutData } from '@/hooks/useWorkoutData';
+import { useRunFormData } from '@/hooks/useRunFormData';
 import { useAiCoach } from '@/hooks/useAiCoach';
+import { useAiExtras } from '@/hooks/useAiExtras';
+import { useAiChat } from '@/hooks/useAiChat';
 import { useWorkoutExports } from '@/hooks/useWorkoutExports';
 import { VersusSummaryCard } from '@/components/ai/VersusSummaryCard';
 import { AiCoachDashboard } from '@/components/ai/AiCoachDashboard';
+import { AiTextCard } from '@/components/ai/AiTextCard';
+import { ChatPanel } from '@/components/ai/ChatPanel';
 import { NextWorkoutInsights } from '@/components/ai/NextWorkoutInsights';
+import { RouteTrackMap } from '@/components/RouteTrackMap';
 import { ShareCardModal } from '@/components/share/ShareCardModal';
 import { ComparisonRow, DetailRow, MetricLabel, SidebarItem } from '@/components/ui/AppPrimitives';
 
-const APP_VERSION = '0.4.2';
+// The Web Speech API ships without TypeScript DOM types, so the minimal
+// surface used for the voice diary is declared here.
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+};
+
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function createSpeechRecognition(): SpeechRecognitionLike | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const scope = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  const Ctor = scope.SpeechRecognition ?? scope.webkitSpeechRecognition;
+  return Ctor ? new Ctor() : null;
+}
 
 export default function Home() {
   const {
@@ -83,17 +130,59 @@ export default function Home() {
     assignShoe,
     updateTags,
     importWorkoutFile,
+    importWorkoutFromScreenshot,
     resetWorkouts,
   } = useWorkoutData();
 
+  const {
+    personalBests,
+    trainingPlans,
+    bodyMetrics,
+    routes,
+    rebuildPersonalBests,
+    persistTrainingPlan,
+    setPlanStatus,
+    removeTrainingPlan,
+    persistBodyMetric,
+    setRouteName,
+  } = useRunFormData();
+
   const [newShoe, setNewShoe] = useState({ name: '', brand: '', model: '', maxDistance: 800 });
+  const [metricDraft, setMetricDraft] = useState({
+    date: new Date().toISOString().slice(0, 10),
+    weight: '',
+    muscleMass: '',
+    fatPercentage: '',
+    sorenessLevel: '',
+    notes: '',
+  });
+  const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
+  const [routeNameDraft, setRouteNameDraft] = useState('');
+  const [planNotice, setPlanNotice] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [lang, setLang] = useState<Language>('ru');
+  const [lang, setLang] = useState<Language>(() => {
+    if (typeof window === 'undefined') {
+      return 'ru';
+    }
+    return window.localStorage.getItem('runform.lang') === 'en' ? 'en' : 'ru';
+  });
+  // Ollama model choices are stored per device and attached to every AI
+  // request by src/lib/ollama.ts; empty string means "use the server default".
+  const [aiModel, setAiModel] = useState('');
+  const [aiVisionModel, setAiVisionModel] = useState('');
+  const [installedModels, setInstalledModels] = useState<Array<{ name: string; size: number }>>([]);
+  const [modelsUnavailable, setModelsUnavailable] = useState(false);
   const [tagFilter, setTagFilter] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const screenshotInputRef = useRef<HTMLInputElement>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedWorkouts, setSelectedWorkouts] = useState<WorkoutData[]>([]);
   const [selectedMetricKey, setSelectedMetricKey] = useState<MetricExplainerKey>('metLoad');
+  const [diaryText, setDiaryText] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [diaryNotice, setDiaryNotice] = useState<string | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const dictationBaseRef = useRef('');
 
   const {
     showShareCard,
@@ -195,6 +284,10 @@ export default function Home() {
     setPlanPhases,
     fetchAIPlan,
     fetchAIAdvice,
+    weekSessions,
+    isWeekLoading,
+    weekError,
+    fetchWeekPlan,
   } = useAiCoach({
     lang,
     history,
@@ -207,6 +300,57 @@ export default function Home() {
     currentEfficiency,
     currentWarmup,
     currentZoneProfile,
+    preferences,
+  });
+
+  const {
+    weeklyDigest,
+    isDigestLoading,
+    generateWeeklyDigest,
+    flagExplanations,
+    isFlagsLoading,
+    explainFlags,
+    readiness,
+    isReadinessLoading,
+    assessReadiness,
+    planExplanations,
+    explainingPlanId,
+    explainPlan,
+    splitsAnalysis,
+    isSplitsLoading,
+    analyzeSplits,
+    reflection,
+    isReflecting,
+    reflectOnNote,
+  } = useAiExtras({
+    lang,
+    history,
+    preferences,
+    profileName,
+    healthFlags,
+    bodyMetrics,
+    currentWeekSummary,
+    previousWeekSummary,
+    weeklyDistanceChange,
+    currentWeekMetLoad,
+    weeklyLoadLabel: weeklyLoadStatus.label,
+    weeklyRecoveryLabel: weeklyRecoveryStatus.label,
+    weekKey: getDateKey(currentWeekStart),
+  });
+
+  const {
+    messages: chatMessages,
+    isStreaming: isChatStreaming,
+    send: sendChatMessage,
+    clear: clearChat,
+  } = useAiChat({
+    lang,
+    history,
+    personalBests,
+    weeklyLoadLabel: weeklyLoadStatus.label,
+    weeklyRecoveryLabel: weeklyRecoveryStatus.label,
+    preferences,
+    profileName,
   });
 
   const stats = workout
@@ -233,13 +377,159 @@ export default function Home() {
     if (!file) return;
 
     try {
-      await importWorkoutFile(file);
+      const result = await importWorkoutFile(file);
       setActiveTab('dashboard');
+      if (result.duplicate) {
+        window.alert(t.importDuplicate);
+      }
     } catch (error) {
       console.error('Error parsing/saving file:', error);
+      window.alert(t.importError);
     } finally {
       event.target.value = '';
     }
+  };
+
+  const handleScreenshotUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      await importWorkoutFromScreenshot(file);
+      setActiveTab('dashboard');
+      window.alert(t.screenshotSaved);
+    } catch (error) {
+      console.error('Screenshot import failed:', error);
+      window.alert(t.screenshotError);
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const workoutSplits = useMemo(() => (workout ? computeWorkoutSplits(workout) : []), [workout]);
+
+  const toggleDictation = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const recognition = createSpeechRecognition();
+    if (!recognition) {
+      window.alert(t.dictationUnsupported);
+      return;
+    }
+
+    dictationBaseRef.current = diaryText.trim();
+    recognition.lang = lang === 'ru' ? 'ru-RU' : 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.onresult = (event) => {
+      let finalText = '';
+      let interimText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalText += result[0].transcript;
+        } else {
+          interimText += result[0].transcript;
+        }
+      }
+      if (finalText.trim()) {
+        dictationBaseRef.current = `${dictationBaseRef.current} ${finalText}`.trim();
+      }
+      setDiaryText(`${dictationBaseRef.current} ${interimText}`.trim());
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  };
+
+  const saveDiaryEntry = () => {
+    if (!diaryText.trim()) return;
+    void persistBodyMetric({ date: new Date().toISOString().slice(0, 10), notes: diaryText.trim() }).then(() => {
+      setDiaryNotice(t.diarySaved);
+      setDiaryText('');
+      window.setTimeout(() => setDiaryNotice(null), 4000);
+    });
+  };
+
+  // The chosen language survives reloads and stays in sync with the document
+  // so screen readers announce the correct locale.
+  useEffect(() => {
+    if (!isClient) return;
+    window.localStorage.setItem('runform.lang', lang);
+    document.documentElement.lang = lang;
+  }, [isClient, lang]);
+
+  // Restore the saved model picks and load the installed-model list from the
+  // local Ollama daemon so Settings can show a picker instead of env vars.
+  useEffect(() => {
+    if (!isClient) return;
+    try {
+      setAiModel(window.localStorage.getItem('runform.aiModel') ?? '');
+      setAiVisionModel(window.localStorage.getItem('runform.aiVisionModel') ?? '');
+    } catch {
+      // Storage disabled — defaults stay in effect.
+    }
+    let cancelled = false;
+    fetch('/api/ollama')
+      .then((response) =>
+        response.ok ? response.json() : Promise.reject(new Error('Ollama unavailable')),
+      )
+      .then((data: { models?: Array<{ name: string; size: number }> }) => {
+        if (cancelled) return;
+        setInstalledModels(data.models ?? []);
+        setModelsUnavailable(false);
+      })
+      .catch(() => {
+        if (!cancelled) setModelsUnavailable(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isClient]);
+
+  const persistModelChoice = (
+    key: 'runform.aiModel' | 'runform.aiVisionModel',
+    value: string,
+    setter: (next: string) => void,
+  ) => {
+    setter(value);
+    try {
+      if (value) {
+        window.localStorage.setItem(key, value);
+      } else {
+        window.localStorage.removeItem(key);
+      }
+    } catch {
+      // Storage disabled — the pick applies for this session only.
+    }
+  };
+
+  // Options for the model selects: whatever Ollama has installed, plus the
+  // currently saved pick if it is not installed right now (so the select
+  // never silently reverts to the default).
+  const modelOptionsFor = (current: string): Array<{ name: string; size: number }> => {
+    const options = [...installedModels];
+    if (current && !options.some((item) => item.name === current)) {
+      options.unshift({ name: current, size: 0 });
+    }
+    return options;
+  };
+
+  const modelSelectStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '12px 14px',
+    borderRadius: '10px',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'rgba(255,255,255,0.04)',
+    color: '#f5f7fb',
+    fontSize: '0.95rem',
+    outline: 'none',
   };
 
   if (!isClient) return null;
@@ -251,6 +541,13 @@ export default function Home() {
         style={{ display: 'none' }} 
         ref={fileInputRef}
         onChange={handleFileUpload}
+      />
+      <input
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        ref={screenshotInputRef}
+        onChange={handleScreenshotUpload}
       />
 
       {/* Sidebar */}
@@ -270,7 +567,7 @@ export default function Home() {
               objectFit: 'contain'
             }}
           />
-          <p className="secondary-text" style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '10px' }}>v{APP_VERSION}</p>
+          <p className="secondary-text" style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '10px' }}>{formatVersionLabel()}</p>
         </div>
 
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -285,7 +582,12 @@ export default function Home() {
           <SidebarItem icon={<ShieldAlert size={20} />} label={t.healthFlags} active={activeTab === 'health-flags'} onClick={() => setActiveTab('health-flags')} />
           <SidebarItem icon={<FileText size={20} />} label={t.report} active={activeTab === 'report'} onClick={() => setActiveTab('report')} />
           <SidebarItem icon={<Sparkles size={20} />} label={t.aiCoach} active={activeTab === 'ai-coach'} onClick={() => setActiveTab('ai-coach')} />
+          <SidebarItem icon={<MessageCircle size={20} />} label={t.chat} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
           <SidebarItem icon={<Zap size={20} />} label={t.nextWorkout} active={activeTab === 'next-workout'} onClick={() => setActiveTab('next-workout')} />
+          <SidebarItem icon={<Trophy size={20} />} label={t.records} active={activeTab === 'records'} onClick={() => setActiveTab('records')} />
+          <SidebarItem icon={<CalendarCheck size={20} />} label={t.trainingPlans} active={activeTab === 'plans'} onClick={() => setActiveTab('plans')} />
+          <SidebarItem icon={<HeartPulse size={20} />} label={t.health} active={activeTab === 'health'} onClick={() => setActiveTab('health')} />
+          <SidebarItem icon={<MapPinned size={20} />} label={t.routes} active={activeTab === 'routes'} onClick={() => setActiveTab('routes')} />
         </nav>
 
         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -295,6 +597,7 @@ export default function Home() {
             onClick={() => setLang(lang === 'ru' ? 'en' : 'ru')} 
           />
           <SidebarItem icon={<Upload size={20} />} label={t.importJson} onClick={() => fileInputRef.current?.click()} />
+          <SidebarItem icon={<Camera size={20} />} label={t.screenshotImport} onClick={() => screenshotInputRef.current?.click()} />
           <SidebarItem icon={<Settings size={20} />} label={t.settings} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </div>
       </aside>
@@ -306,7 +609,7 @@ export default function Home() {
             {!workout ? (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>
                  <Upload size={48} style={{ marginBottom: '16px' }} />
-                 <h2>Нет данных. Пожалуйста, импортируйте JSON файл тренировки.</h2>
+                 <h2>{t.noData}</h2>
               </div>
             ) : (
               <div
@@ -673,7 +976,7 @@ export default function Home() {
                                 <ComparisonRow label={t.distance} value={`${w.distance.toFixed(2)} km`} isHigher={w.distance > selectedWorkouts[idx === 0 ? 1 : 0].distance} />
                                 <ComparisonRow label={t.duration} value={formatTime(w.duration)} isHigher={w.duration > selectedWorkouts[idx === 0 ? 1 : 0].duration} />
                                 <ComparisonRow label={t.avgHr} value={`${w.avgHeartRate} bpm`} isHigher={w.avgHeartRate > selectedWorkouts[idx === 0 ? 1 : 0].avgHeartRate} isGood={false} />
-                                <ComparisonRow label={t.pace} value={`${w.pace}/km`} isHigher={parseFloat(w.pace.replace('′', '.')) < parseFloat(selectedWorkouts[idx === 0 ? 1 : 0].pace.replace('′', '.'))} />
+                                <ComparisonRow label={t.pace} value={`${w.pace}/km`} isHigher={parsePaceToMinutes(w.pace) < parsePaceToMinutes(selectedWorkouts[idx === 0 ? 1 : 0].pace)} />
                                 <ComparisonRow label={t.calories} value={`${w.calories} kcal`} isHigher={w.calories > selectedWorkouts[idx === 0 ? 1 : 0].calories} />
                             </div>
                         </div>
@@ -685,32 +988,41 @@ export default function Home() {
         )}
 
         {activeTab === 'calendar' && (
-          <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.9fr', gap: '24px', alignItems: 'start' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                <div>
-                  <h1 style={{ marginBottom: '8px' }}>{t.calendar}</h1>
-                  <p className="secondary-text">
-                    {lang === 'ru'
-                      ? 'Сетка по дням с нагрузкой, пустыми днями и быстрым переходом к деталям.'
-                      : 'Day grid with load, rest days, and quick access to details.'}
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
-                    style={{ width: '42px', height: '42px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', cursor: 'pointer' }}
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                  <button
-                    onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
-                    style={{ width: '42px', height: '42px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', cursor: 'pointer' }}
-                  >
-                    <ChevronRight size={18} />
-                  </button>
-                </div>
+          <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
+              <div>
+                <h1 style={{ marginBottom: '8px' }}>{t.calendar}</h1>
+                <p className="secondary-text">
+                  {lang === 'ru'
+                    ? 'Сетка по дням с нагрузкой, пустыми днями и быстрым переходом к деталям.'
+                    : 'Day grid with load, rest days, and quick access to details.'}
+                </p>
               </div>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={() => {
+                    const now = new Date();
+                    setCurrentMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+                    setSelectedDateKey(getDateKey(now));
+                  }}
+                  style={{ height: '42px', padding: '0 16px', borderRadius: '12px', border: '1px solid rgba(52,199,89,0.3)', background: 'rgba(52,199,89,0.12)', color: '#34c759', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem' }}
+                >
+                  {lang === 'ru' ? 'Сегодня' : 'Today'}
+                </button>
+                <button
+                  onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                  style={{ width: '42px', height: '42px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', cursor: 'pointer' }}
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <button
+                  onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                  style={{ width: '42px', height: '42px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', cursor: 'pointer' }}
+                >
+                  <ChevronRight size={18} />
+                </button>
+              </div>
+            </div>
 
               <div className="premium-card" style={{ padding: '28px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
@@ -736,7 +1048,7 @@ export default function Home() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '10px', marginBottom: '10px' }}>
                   {calendarWeekdays.map((weekday) => (
-                    <div key={weekday} style={{ padding: '8px 10px', fontSize: '0.8rem', color: '#7f8a9a', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+                    <div key={weekday} style={{ padding: '0 12px 8px', fontSize: '0.8rem', color: '#7f8a9a', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
                       {weekday}
                     </div>
                   ))}
@@ -758,78 +1070,130 @@ export default function Home() {
                     const isSelected = selectedDateKey === key;
                     const isToday = getDateKey(new Date()) === key;
 
+                    const cellTitle = dayWorkouts.length > 0
+                      ? dayWorkouts
+                          .map((item) => `${item.name} · ${item.distance.toFixed(1)} ${lang === 'ru' ? 'км' : 'km'} · HR ${item.avgHeartRate}`)
+                          .join('\n')
+                      : undefined;
+
                     return (
                       <button
                         key={key}
                         onClick={() => setSelectedDateKey(key)}
+                        title={cellTitle}
                         style={{
                           minHeight: '108px',
-                          borderRadius: '18px',
+                          borderRadius: '16px',
                           border: isSelected ? '1px solid rgba(87,166,255,0.85)' : '1px solid rgba(255,255,255,0.06)',
                           background: dayWorkouts.length > 0
                             ? 'linear-gradient(180deg, rgba(14, 25, 41, 0.95) 0%, rgba(7, 12, 21, 0.95) 100%)'
                             : 'rgba(255,255,255,0.025)',
-                          padding: '12px',
+                          padding: '10px 12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
+                          overflow: 'hidden',
                           textAlign: 'left',
                           cursor: 'pointer',
                           opacity: inMonth ? 1 : 0.35,
                           boxShadow: isSelected ? '0 0 0 1px rgba(87,166,255,0.2), 0 10px 24px rgba(0,0,0,0.35)' : 'none',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                          <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>{date.getDate()}</span>
-                          {isToday && (
-                            <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#05070b', background: '#34c759', borderRadius: '999px', padding: '3px 7px' }}>
-                              {lang === 'ru' ? 'Сегодня' : 'Today'}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                          <span
+                            style={{
+                              fontSize: '0.95rem',
+                              fontWeight: 700,
+                              lineHeight: 1.2,
+                              flexShrink: 0,
+                              color: isToday ? '#05070b' : '#fff',
+                              background: isToday ? '#34c759' : 'transparent',
+                              borderRadius: '8px',
+                              padding: isToday ? '2px 7px' : '2px 0',
+                            }}
+                          >
+                            {date.getDate()}
+                          </span>
+                          {workoutType && (
+                            <span
+                              style={{
+                                fontSize: '0.6rem',
+                                fontWeight: 800,
+                                letterSpacing: '0.05em',
+                                color: workoutType.color,
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              {workoutType.short}
                             </span>
                           )}
                         </div>
+
+                        <div style={{ width: '100%', height: '5px', borderRadius: '999px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden', flexShrink: 0 }}>
+                          {dayWorkouts.length > 0 && <div style={{ width: load.width, height: '100%', borderRadius: '999px', background: load.fill }} />}
+                        </div>
+
                         {dayWorkouts.length > 0 ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <div style={{ width: '100%', height: '6px', borderRadius: '999px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-                              <div style={{ width: load.width, height: '100%', borderRadius: '999px', background: load.fill }} />
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: load.color }} />
-                              <span style={{ fontSize: '0.82rem', color: '#d8e1ee', fontWeight: 700 }}>
+                          <>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '6px', marginTop: 'auto' }}>
+                              <span
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  fontSize: '0.84rem',
+                                  fontWeight: 700,
+                                  color: '#fff',
+                                  minWidth: 0,
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: load.color, flexShrink: 0 }} />
                                 {totalDistance.toFixed(1)} {lang === 'ru' ? 'км' : 'km'}
                               </span>
+                              <span style={{ fontSize: '0.7rem', color: '#8b9ab1', flexShrink: 0 }}>{dayWorkouts.length}×</span>
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
-                              <p style={{ fontSize: '0.74rem', color: '#8b9ab1' }}>
-                                {dayWorkouts.length} {lang === 'ru' ? 'трен.' : 'workouts'}
-                              </p>
-                              {workoutType && (
-                                <span style={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.05em', color: workoutType.color }}>
-                                  {workoutType.short}
-                                </span>
-                              )}
+                            <div style={{ fontSize: '0.7rem', fontWeight: 700, color: load.color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {load.label}
+                              {avgHrForDay > 0 ? <span style={{ color: '#8b9ab1', fontWeight: 400 }}>{` · HR ${avgHrForDay}`}</span> : null}
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                              <p style={{ fontSize: '0.74rem', color: '#8b9ab1' }}>
-                                HR {avgHrForDay} bpm
-                              </p>
-                              <p style={{ fontSize: '0.7rem', color: load.color, fontWeight: 700 }}>
-                                {load.label}
-                              </p>
-                            </div>
-                          </div>
+                          </>
                         ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', color: '#576171' }}>
-                            <div style={{ width: '100%', height: '6px', borderRadius: '999px', background: 'rgba(255,255,255,0.05)' }} />
-                            <p style={{ fontSize: '0.72rem' }}>
-                              {lang === 'ru' ? 'Восстановление' : 'Recovery'}
-                            </p>
+                          <div style={{ marginTop: 'auto', fontSize: '0.72rem', color: '#576171', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {lang === 'ru' ? 'Отдых' : 'Rest'}
                           </div>
                         )}
                       </button>
                     );
                   })}
                 </div>
-              </div>
-            </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', marginTop: '16px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  {(lang === 'ru'
+                    ? [
+                        { label: 'Лёгкая', color: '#34c759' },
+                        { label: 'Средняя', color: '#ff9500' },
+                        { label: 'Высокая', color: '#ff2d55' },
+                      ]
+                    : [
+                        { label: 'Light', color: '#34c759' },
+                        { label: 'Medium', color: '#ff9500' },
+                        { label: 'High', color: '#ff2d55' },
+                      ]
+                  ).map((item) => (
+                    <span key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '0.75rem', color: '#8b9ab1' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: item.color }} />
+                      {item.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr)', gap: '24px', alignItems: 'start' }}>
               <div className="premium-card">
                 <h3 style={{ marginBottom: '18px' }}>
                   {selectedDateKey
@@ -1475,16 +1839,11 @@ export default function Home() {
                     </h3>
                     <div style={{ width: '100%', height: '260px' }}>
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={history.map((w) => {
-                                const p = w.pace.split('′');
-                                const min = parseInt(p[0]) || 0;
-                                const sec = parseInt(p[1]) || 0;
-                                return {
-                                    name: new Date(w.startDate).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short' }), 
-                                    pace: parseFloat((min + sec/60).toFixed(2)),
-                                    label: w.pace
-                                };
-                            })}>
+                            <AreaChart data={history.map((w) => ({
+                                name: new Date(w.startDate).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short' }),
+                                pace: parseFloat(parsePaceToMinutes(w.pace).toFixed(2)),
+                                label: w.pace
+                            }))}>
                                 <defs>
                                     <linearGradient id="colorPace" x1="0" y1="0" x2="0" y2="1">
                                         <stop offset="5%" stopColor="#ff2d55" stopOpacity={0.3}/>
@@ -1633,9 +1992,7 @@ export default function Home() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', marginBottom: '12px' }}>
                       <h3 style={{ color: flag.color }}>{flag.title}</h3>
                       <span style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.05em', color: flag.color }}>
-                        {flag.severity === 'high'
-                          ? (lang === 'ru' ? 'HIGH' : 'HIGH')
-                          : (lang === 'ru' ? 'MEDIUM' : 'MEDIUM')}
+                        {flag.severity === 'high' ? 'HIGH' : 'MEDIUM'}
                       </span>
                     </div>
                     <p style={{ color: '#ced6e0', lineHeight: 1.6 }}>{flag.detail}</p>
@@ -1854,7 +2211,9 @@ export default function Home() {
                         <Sparkles size={20} />
                       </div>
                       <div>
-                        <h3 style={{ fontSize: '1.1rem' }}>{t.aiCoach} (Qwen 2.5)</h3>
+                        <h3 style={{ fontSize: '1.1rem' }}>
+                        {t.aiCoach} (Ollama{aiModel ? ` · ${aiModel}` : ''})
+                      </h3>
                         {!aiResponse && <p className="secondary-text" style={{ fontSize: '0.85rem' }}>{lang === 'ru' ? 'Глубокий разбор поверх локально рассчитанного контекста' : 'Deep review on top of locally computed context'}</p>}
                       </div>
                     </div>
@@ -1879,6 +2238,129 @@ export default function Home() {
                   )}
                 </div>
 
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                  <AiTextCard
+                    lang={lang}
+                    title={t.weeklyDigest}
+                    hint={lang === 'ru' ? 'Сводка недели от локальной модели' : 'A weekly summary from the local model'}
+                    accent="#34c759"
+                    actionLabel={t.generateDigest}
+                    onAction={() => void generateWeeklyDigest()}
+                    isLoading={isDigestLoading}
+                    result={weeklyDigest}
+                    emptyHint={lang === 'ru'
+                      ? 'Дайджест учитывает объём недели, MET-load, восстановление и красные флаги. Готовый текст кэшируется до следующей недели.'
+                      : 'The digest accounts for weekly volume, MET load, recovery and red flags. The result is cached until next week.'}
+                  />
+
+                  {healthFlags.length > 0 && (
+                    <AiTextCard
+                      lang={lang}
+                      title={t.explainFlags}
+                      hint={healthFlags.map((flag) => flag.title).join(' · ')}
+                      accent="#ff2d55"
+                      actionLabel={lang === 'ru' ? 'Объяснить персонально' : 'Explain personally'}
+                      onAction={() => void explainFlags()}
+                      isLoading={isFlagsLoading}
+                      result={flagExplanations}
+                    />
+                  )}
+
+                  <AiTextCard
+                    lang={lang}
+                    title={t.gpsSplits}
+                    hint={lang === 'ru' ? 'Пульс и темп по километрам' : 'Heart rate and pace per kilometre'}
+                    accent="#007aff"
+                    actionLabel={t.analyzeSplits}
+                    onAction={() => void analyzeSplits(workoutSplits, workout)}
+                    isLoading={isSplitsLoading}
+                    result={splitsAnalysis}
+                    disabled={workoutSplits.length === 0}
+                    emptyHint={workoutSplits.length === 0 ? t.noGpsTrack : undefined}
+                  >
+                    {workout && (workout.route?.length ?? 0) >= 2 && (
+                      <RouteTrackMap route={workout.route ?? []} splits={workoutSplits} lang={lang} />
+                    )}
+                    {workoutSplits.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: '10px', fontSize: '0.72rem', opacity: 0.45, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          <span>{lang === 'ru' ? 'КМ' : 'KM'}</span>
+                          <span>{t.avgHr}</span>
+                          <span>{t.pace}</span>
+                        </div>
+                        {workoutSplits.map((split) => (
+                          <div key={split.km} style={{ display: 'grid', gridTemplateColumns: '60px 1fr 1fr', gap: '10px', padding: '8px 10px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', fontSize: '0.88rem' }}>
+                            <span style={{ fontWeight: 600 }}>{split.km}</span>
+                            <span className="secondary-text">{split.avgHr != null ? `${split.avgHr} bpm` : '—'}</span>
+                            <span className="secondary-text">{split.paceSec !== undefined ? `${formatSplitPace(split.paceSec)}/km` : '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </AiTextCard>
+
+                  <AiTextCard
+                    lang={lang}
+                    title={t.voiceDiary}
+                    hint={lang === 'ru' ? 'Диктуйте или пишите — модель свяжет заметку с метриками' : 'Dictate or type — the model links the note to your metrics'}
+                    accent="#bf5af2"
+                    actionLabel={t.reflect}
+                    onAction={() => void reflectOnNote(diaryText)}
+                    isLoading={isReflecting}
+                    result={reflection}
+                    disabled={!diaryText.trim()}
+                    emptyHint={lang === 'ru'
+                      ? 'Заметка сохраняется в раздел «Здоровье» и учитывается в оценке восстановления.'
+                      : 'Notes are saved under Health and feed the recovery assessment.'}
+                  >
+                    <textarea
+                      value={diaryText}
+                      onChange={(event) => setDiaryText(event.target.value)}
+                      placeholder={t.diaryPlaceholder}
+                      rows={3}
+                      style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px', resize: 'vertical', marginBottom: '10px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={toggleDictation}
+                        style={{
+                          background: isListening ? 'rgba(255,45,85,0.15)' : 'rgba(191,90,242,0.12)',
+                          color: isListening ? '#ff2d55' : '#bf5af2',
+                          border: `1px solid ${isListening ? 'rgba(255,45,85,0.3)' : 'rgba(191,90,242,0.25)'}`,
+                          padding: '9px 14px',
+                          borderRadius: '10px',
+                          cursor: 'pointer',
+                          fontWeight: 600,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                        }}
+                      >
+                        <Mic size={16} /> {isListening ? (lang === 'ru' ? 'Стоп' : 'Stop') : t.dictate}
+                      </button>
+                      <button
+                        disabled={!diaryText.trim()}
+                        onClick={saveDiaryEntry}
+                        style={{
+                          background: 'rgba(52,199,89,0.12)',
+                          color: '#34c759',
+                          border: '1px solid rgba(52,199,89,0.25)',
+                          padding: '9px 14px',
+                          borderRadius: '10px',
+                          cursor: diaryText.trim() ? 'pointer' : 'not-allowed',
+                          fontWeight: 600,
+                          opacity: diaryText.trim() ? 1 : 0.5,
+                        }}
+                      >
+                        {t.saveToDiary}
+                      </button>
+                      {diaryNotice && (
+                        <span className="secondary-text" style={{ alignSelf: 'center', color: '#34c759', fontSize: '0.82rem' }}>{diaryNotice}</span>
+                      )}
+                    </div>
+                  </AiTextCard>
+                </div>
+
                 <AiCoachDashboard
                   lang={lang}
                   workoutAiReview={workoutAiReview}
@@ -1890,6 +2372,372 @@ export default function Home() {
                   onMetricSelect={setSelectedMetricKey}
                 />
               </>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'chat' && (
+          <div className="animate-fade-in no-print" style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '860px' }}>
+            <div>
+              <h1 style={{ marginBottom: '8px' }}>{t.chat}</h1>
+              <p className="secondary-text">
+                {lang === 'ru'
+                  ? 'Диалог с локальной моделью: контекстом служат последние тренировки, рекорды и состояние недели. История чата хранится в вашей базе.'
+                  : 'A conversation with the local model: recent workouts, records and the current week provide the context. The chat history stays in your database.'}
+              </p>
+            </div>
+
+            <ChatPanel
+              messages={chatMessages}
+              isStreaming={isChatStreaming}
+              onSend={(text) => void sendChatMessage(text)}
+              onClear={() => void clearChat()}
+              lang={lang}
+              emptyText={t.chatEmpty}
+              placeholder={t.chatPlaceholder}
+              clearLabel={t.chatClear}
+            />
+          </div>
+        )}
+
+        {activeTab === 'records' && (
+          <div className="animate-fade-in no-print" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div>
+              <h1 style={{ marginBottom: '8px' }}>{t.personalBests}</h1>
+              <p className="secondary-text">
+                {lang === 'ru'
+                  ? 'Оценка лучшего темпа на дистанцию по каждой тренировке: учитывается доля работы в 4-5 зонах пульса и поправка на дистанцию (модель Ригеля).'
+                  : 'Estimated best pace per distance for every workout: it uses the share of time in HR zones 4-5 plus a Riegel distance adjustment.'}
+              </p>
+            </div>
+
+            {personalBests.length === 0 ? (
+              <div className="premium-card" style={{ textAlign: 'center', padding: '48px 32px' }}>
+                <Trophy size={40} style={{ marginBottom: '12px' }} />
+                <p>{t.noRecords}</p>
+              </div>
+            ) : (
+              <>
+                <div className="premium-card">
+                  <p className="secondary-text" style={{ marginBottom: '16px' }}>{t.outdoorRecord}</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                    {(['1k', '5k', '10k', 'half'] as PersonalBestType[]).map((type) => {
+                      const record = personalBests.find((item) => item.type === type && item.condition === 'outdoor');
+                      const distance = getTierDistance(type);
+                      return (
+                        <div key={type} style={{ padding: '18px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                          <p className="secondary-text" style={{ marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{type}</p>
+                          {record ? (
+                            <>
+                              <h2 style={{ marginBottom: '6px' }}>{formatPersonalBest(distance * record.value * 60)}</h2>
+                              <p className="secondary-text">{record.value.toFixed(2)} min/km</p>
+                              <p className="secondary-text" style={{ fontSize: '0.78rem', marginTop: '6px' }}>
+                                {new Date(record.achievedAt).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US')}
+                              </p>
+                            </>
+                          ) : (
+                            <p className="secondary-text">—</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {personalBests.some((item) => item.condition === 'indoor') && (
+                  <div className="premium-card">
+                    <p className="secondary-text" style={{ marginBottom: '16px' }}>{t.indoorRecord}</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                      {(['1k', '5k', '10k'] as PersonalBestType[]).map((type) => {
+                        const record = personalBests.find((item) => item.type === type && item.condition === 'indoor');
+                        const distance = getTierDistance(type);
+                        return (
+                          <div key={`indoor-${type}`} style={{ padding: '18px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)' }}>
+                            <p className="secondary-text" style={{ marginBottom: '6px' }}>{type}</p>
+                            <h3>{record ? formatPersonalBest(distance * record.value * 60) : '—'}</h3>
+                            {record && <p className="secondary-text">{record.value.toFixed(2)} min/km</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="premium-card">
+                  <p className="secondary-text" style={{ marginBottom: '12px' }}>
+                    {lang === 'ru'
+                      ? 'Рекорды считаются по истории тренировок. Пересчитать после массового импорта:'
+                      : 'Records are derived from the workout history. Recalculate after a bulk import:'}
+                  </p>
+                  <button
+                    onClick={() => void rebuildPersonalBests()}
+                    style={{ background: 'rgba(0, 122, 255, 0.12)', color: '#007aff', border: '1px solid rgba(0, 122, 255, 0.24)', padding: '10px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    {lang === 'ru' ? 'Обновить' : 'Refresh'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'plans' && (
+          <div className="animate-fade-in no-print" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div>
+              <h1 style={{ marginBottom: '8px' }}>{t.trainingPlansTitle}</h1>
+              <p className="secondary-text">
+                {lang === 'ru'
+                  ? 'Планы, сгенерированные локальной моделью на экране «План на завтра», сохраняются здесь.'
+                  : 'Plans generated by the local model on the “Next workout” screen are saved here.'}
+              </p>
+            </div>
+
+            {trainingPlans.length === 0 ? (
+              <div className="premium-card" style={{ textAlign: 'center', padding: '48px 32px' }}>
+                <CalendarCheck size={40} style={{ marginBottom: '12px' }} />
+                <p style={{ marginBottom: '16px' }}>{t.noPlans}</p>
+                <button
+                  onClick={() => setActiveTab('next-workout')}
+                  style={{ background: '#5856d6', color: '#fff', border: 'none', padding: '12px 18px', borderRadius: '12px', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  {t.nextWorkout}
+                </button>
+              </div>
+            ) : (
+              trainingPlans.map((plan) => (
+                <div key={plan.id} className="premium-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', marginBottom: '16px' }}>
+                    <div>
+                      <h3 style={{ marginBottom: '6px' }}>{plan.goal}</h3>
+                      <p className="secondary-text">
+                        {new Date(plan.startDate).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US')} · {plan.status}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {plan.status === 'active' && (
+                        <button
+                          onClick={() => void setPlanStatus(plan.id, 'completed')}
+                          style={{ background: 'rgba(52, 199, 89, 0.12)', color: '#34c759', border: '1px solid rgba(52, 199, 89, 0.25)', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600 }}
+                        >
+                          {t.markCompleted}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => void explainPlan(plan)}
+                        disabled={explainingPlanId !== null}
+                        style={{
+                          background: 'rgba(88, 86, 214, 0.12)',
+                          color: '#a5a3ff',
+                          border: '1px solid rgba(88, 86, 214, 0.25)',
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          cursor: explainingPlanId !== null ? 'not-allowed' : 'pointer',
+                          fontWeight: 600,
+                          opacity: explainingPlanId !== null && explainingPlanId !== plan.id ? 0.5 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        {explainingPlanId === plan.id && <Loader2 size={14} className="animate-spin" />}
+                        {t.explainPlan}
+                      </button>
+                      <button
+                        onClick={() => void removeTrainingPlan(plan.id)}
+                        aria-label={t.deletePlan}
+                        style={{ background: 'rgba(255, 45, 85, 0.12)', color: '#ff2d55', border: '1px solid rgba(255, 45, 85, 0.25)', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {plan.sessions.map((session, index) => (
+                      <div key={`${plan.id}-${index}`} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.6fr 1.4fr', gap: '12px', padding: '12px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
+                        <span style={{ fontWeight: 600 }}>{session.phase ?? session.type ?? '—'}</span>
+                        <span className="secondary-text">{session.duration ?? '—'}</span>
+                        <span className="secondary-text">{session.zone ?? '—'}</span>
+                        <span className="secondary-text">{session.notes ?? session.pace ?? '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {plan.id in planExplanations && (
+                    <div
+                      className="animate-fade-in"
+                      style={{ marginTop: '14px', padding: '14px 16px', borderRadius: '12px', background: 'rgba(88, 86, 214, 0.06)', border: '1px solid rgba(88, 86, 214, 0.18)', whiteSpace: 'pre-line', lineHeight: 1.6 }}
+                    >
+                      {planExplanations[plan.id] || t.aiThinking}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {activeTab === 'health' && (
+          <div className="animate-fade-in no-print" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div>
+              <h1 style={{ marginBottom: '8px' }}>{t.bodyMetrics}</h1>
+              <p className="secondary-text">
+                {lang === 'ru'
+                  ? 'Вес, состав тела и субъективная крепатура. Записи хранятся локально в той же базе, что и тренировки.'
+                  : 'Weight, body composition and subjective soreness. Entries live locally in the same database as the workouts.'}
+              </p>
+            </div>
+
+            <div className="premium-card">
+              <p className="secondary-text" style={{ marginBottom: '16px' }}>{t.addMetric}</p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                {([
+                  ['date', t.date, 'date'],
+                  ['weight', t.weight, 'number'],
+                  ['muscleMass', t.muscleMass, 'number'],
+                  ['fatPercentage', t.fatPercentage, 'number'],
+                  ['sorenessLevel', t.soreness, 'number'],
+                ] as Array<[keyof typeof metricDraft, string, string]>).map(([key, label, type]) => (
+                  <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{label}</span>
+                    <input
+                      type={type}
+                      value={metricDraft[key]}
+                      onChange={(event) => setMetricDraft((draft) => ({ ...draft, [key]: event.target.value }))}
+                      style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                    />
+                  </label>
+                ))}
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{t.notes}</span>
+                  <input
+                    value={metricDraft.notes}
+                    onChange={(event) => setMetricDraft((draft) => ({ ...draft, notes: event.target.value }))}
+                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                  />
+                </label>
+              </div>
+              <button
+                onClick={() => {
+                  const toNumber = (value: string) => {
+                    const parsed = Number.parseFloat(value);
+                    return Number.isFinite(parsed) ? parsed : undefined;
+                  };
+                  void persistBodyMetric({
+                    date: metricDraft.date || new Date().toISOString().slice(0, 10),
+                    weight: toNumber(metricDraft.weight),
+                    muscleMass: toNumber(metricDraft.muscleMass),
+                    fatPercentage: toNumber(metricDraft.fatPercentage),
+                    sorenessLevel: toNumber(metricDraft.sorenessLevel),
+                    notes: metricDraft.notes || undefined,
+                  }).then(() =>
+                    setMetricDraft({
+                      date: new Date().toISOString().slice(0, 10),
+                      weight: '',
+                      muscleMass: '',
+                      fatPercentage: '',
+                      sorenessLevel: '',
+                      notes: '',
+                    }),
+                  );
+                }}
+                style={{ background: '#007aff', color: '#fff', border: 'none', padding: '11px 18px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600 }}
+              >
+                {t.save}
+              </button>
+            </div>
+
+            {bodyMetrics.length === 0 ? (
+              <div className="premium-card" style={{ textAlign: 'center', padding: '40px 32px' }}>
+                <Weight size={40} style={{ marginBottom: '12px' }} />
+                <p>{t.noMetrics}</p>
+              </div>
+            ) : (
+              <div className="premium-card">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {bodyMetrics.map((metric) => (
+                    <div key={metric.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.6fr', gap: '12px', padding: '12px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
+                      <span style={{ fontWeight: 600 }}>{new Date(metric.date).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US')}</span>
+                      <span className="secondary-text">{metric.weight ?? '—'} kg</span>
+                      <span className="secondary-text">{metric.muscleMass ?? '—'} kg</span>
+                      <span className="secondary-text">{metric.fatPercentage ?? '—'} %</span>
+                      <span className="secondary-text">{metric.sorenessLevel ?? '—'} / 10</span>
+                      <span className="secondary-text">{metric.notes ?? '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'routes' && (
+          <div className="animate-fade-in no-print" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div>
+              <h1 style={{ marginBottom: '8px' }}>{t.routeIntelligence}</h1>
+              <p className="secondary-text">
+                {lang === 'ru'
+                  ? 'Повторяющиеся трассы распознаются по GPS-треку с точностью до нескольких метров, поэтому один и тот же маршрут не создаёт новую запись.'
+                  : 'Repeating courses are matched by a GPS fingerprint with a few metres of tolerance, so the same route never creates a new entry.'}
+              </p>
+            </div>
+
+            {routes.length === 0 ? (
+              <div className="premium-card" style={{ textAlign: 'center', padding: '48px 32px' }}>
+                <MapPinned size={40} style={{ marginBottom: '12px' }} />
+                <p>{t.noRoutes}</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
+                {routes.map((route) => (
+                  <div key={route.id} className="premium-card">
+                    {editingRouteId === route.id ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <input
+                          value={routeNameDraft}
+                          onChange={(event) => setRouteNameDraft(event.target.value)}
+                          style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                        />
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            onClick={() => {
+                              void setRouteName(route.id, routeNameDraft);
+                              setEditingRouteId(null);
+                            }}
+                            style={{ background: '#007aff', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '9px', cursor: 'pointer', fontWeight: 600 }}
+                          >
+                            {t.save}
+                          </button>
+                          <button
+                            onClick={() => setEditingRouteId(null)}
+                            style={{ background: 'rgba(255,255,255,0.06)', color: 'inherit', border: '1px solid rgba(255,255,255,0.1)', padding: '9px 14px', borderRadius: '9px', cursor: 'pointer' }}
+                          >
+                            {t.cancel}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                          <h3>{route.name}</h3>
+                          <button
+                            aria-label={t.rename}
+                            onClick={() => {
+                              setEditingRouteId(route.id);
+                              setRouteNameDraft(route.name);
+                            }}
+                            style={{ background: 'rgba(255,255,255,0.06)', color: 'inherit', border: '1px solid rgba(255,255,255,0.1)', padding: '7px 9px', borderRadius: '8px', cursor: 'pointer', display: 'flex' }}
+                          >
+                            <Pencil size={15} />
+                          </button>
+                        </div>
+                        <p className="secondary-text" style={{ marginBottom: '6px' }}>{t.runsOnRoute}: {route.runCount}</p>
+                        <p className="secondary-text" style={{ fontSize: '0.8rem' }}>
+                          {t.lastRun}: {route.lastRunAt ? new Date(route.lastRunAt).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US') : '—'}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -1929,6 +2777,20 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
+
+                <AiTextCard
+                  lang={lang}
+                  title={t.readiness}
+                  hint={lang === 'ru' ? 'HRV, пульсовой тренд, нагрузка недели и крепатура' : 'HRV, heart-rate trend, weekly load and soreness'}
+                  accent="#ff9500"
+                  actionLabel={t.assessReadiness}
+                  onAction={() => void assessReadiness()}
+                  isLoading={isReadinessLoading}
+                  result={readiness}
+                  emptyHint={lang === 'ru'
+                    ? 'Модель выдаст вердикт GO / CAUTION / REST с аргументами — чтобы решить, тягать ли завтра тяжёлую сессию.'
+                    : 'The model answers GO / CAUTION / REST with reasons — to decide whether tomorrow should be a hard session.'}
+                />
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                   {[
@@ -1982,6 +2844,40 @@ export default function Home() {
                   {isPlanLoading ? <Loader2 size={18} className="animate-spin" /> : (trainingGoal ? t.generatePlan : (lang === 'ru' ? '← Выберите цель выше' : '← Choose a goal above'))}
                 </button>
 
+                <button
+                  disabled={isWeekLoading || !trainingGoal}
+                  onClick={() => void fetchWeekPlan()}
+                  style={{
+                    width: '100%',
+                    marginTop: '10px',
+                    background: 'transparent',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    color: trainingGoal ? '#fff' : '#a0a0a0',
+                    padding: '14px',
+                    borderRadius: '12px',
+                    fontWeight: 700,
+                    fontSize: '0.95rem',
+                    cursor: trainingGoal ? 'pointer' : 'not-allowed',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {isWeekLoading ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : (
+                    `📅 ${lang === 'ru' ? 'План на неделю (7 дней)' : 'Weekly plan (7 days)'}`
+                  )}
+                </button>
+
+                {(isPlanLoading || isWeekLoading) && (
+                  <p className="secondary-text" style={{ fontSize: '0.8rem', marginTop: '10px', textAlign: 'center' }}>
+                    {t.modelLoading}
+                  </p>
+                )}
+
                 <NextWorkoutInsights
                   lang={lang}
                   weeklyLoadLabel={weeklyLoadStatus.label}
@@ -2017,21 +2913,104 @@ export default function Home() {
                               <span style={{ fontWeight: 700, color, fontSize: '1.05rem' }}>{phase.duration}</span>
                             </div>
                             <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-                              <div><p style={{ fontSize: '0.7rem', opacity: 0.4, marginBottom: '2px' }}>ПУЛЬС</p><p style={{ fontSize: '0.88rem', fontWeight: 600, color }}>{phase.hr_range}</p></div>
-                              <div><p style={{ fontSize: '0.7rem', opacity: 0.4, marginBottom: '2px' }}>ТЕМП</p><p style={{ fontSize: '0.88rem', fontWeight: 600 }}>{phase.pace}</p></div>
-                              <div style={{ flex: 1 }}><p style={{ fontSize: '0.7rem', opacity: 0.4, marginBottom: '2px' }}>СОВЕТ</p><p style={{ fontSize: '0.83rem', opacity: 0.75 }}>{phase.notes}</p></div>
+                              <div><p style={{ fontSize: '0.7rem', opacity: 0.4, marginBottom: '2px' }}>{lang === 'ru' ? 'ПУЛЬС' : 'HR'}</p><p style={{ fontSize: '0.88rem', fontWeight: 600, color }}>{phase.hr_range}</p></div>
+                              <div><p style={{ fontSize: '0.7rem', opacity: 0.4, marginBottom: '2px' }}>{lang === 'ru' ? 'ТЕМП' : 'PACE'}</p><p style={{ fontSize: '0.88rem', fontWeight: 600 }}>{phase.pace}</p></div>
+                              <div style={{ flex: 1 }}><p style={{ fontSize: '0.7rem', opacity: 0.4, marginBottom: '2px' }}>{lang === 'ru' ? 'СОВЕТ' : 'TIP'}</p><p style={{ fontSize: '0.83rem', opacity: 0.75 }}>{phase.notes}</p></div>
                             </div>
                           </div>
                         </div>
                       );
                     })}
+                    <button
+                      onClick={() => {
+                        const goalLabels: Record<string, string> = { fat_loss: 'Fat Loss', endurance: 'Endurance', speed: 'Speed' };
+                        const timezone = new Date().toISOString().slice(0, 10);
+                        void persistTrainingPlan(`${goalLabels[trainingGoal ?? ''] ?? 'Plan'} · ${timezone}`, planPhases).then(() => {
+                          setPlanNotice(t.planSaved);
+                          window.setTimeout(() => setPlanNotice(null), 4000);
+                        });
+                      }}
+                      style={{ marginTop: '4px', background: 'rgba(52, 199, 89, 0.12)', color: '#34c759', border: '1px solid rgba(52, 199, 89, 0.24)', padding: '10px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      {t.savePlan}
+                    </button>
                   </div>
+                )}
+
+                {planNotice && (
+                  <p className="secondary-text" style={{ marginTop: '12px', color: '#34c759' }}>{planNotice}</p>
                 )}
 
                 {aiPlan && planPhases.length === 0 && (
                   <div className="animate-fade-in" style={{ padding: '16px', background: 'rgba(52, 199, 89, 0.05)', borderRadius: '12px', border: '1px solid rgba(52, 199, 89, 0.1)', whiteSpace: 'pre-line', marginTop: '16px' }}>
                     <p style={{ fontWeight: 600, color: '#34c759', marginBottom: '8px' }}>{t.planAdvice}:</p>
                     {aiPlan}
+                  </div>
+                )}
+
+                {weekError && (
+                  <div className="animate-fade-in" style={{ padding: '16px', background: 'rgba(255, 45, 85, 0.06)', borderRadius: '12px', border: '1px solid rgba(255, 45, 85, 0.18)', whiteSpace: 'pre-line', marginTop: '16px', color: '#ff6b81' }}>
+                    {weekError}
+                  </div>
+                )}
+
+                {weekSessions.length > 0 && (
+                  <div className="animate-fade-in" style={{ marginTop: '24px' }}>
+                    <p style={{ fontWeight: 600, color: '#007aff', marginBottom: '16px', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {lang === 'ru'
+                        ? `План на неделю · ${weekSessions[0].dateLabel} — ${weekSessions[6].dateLabel}`
+                        : `Week plan · ${weekSessions[0].dateLabel} — ${weekSessions[6].dateLabel}`}
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '10px' }}>
+                      {weekSessions.map((day) => {
+                        const zoneColors: Record<string, string> = { Z1: '#34c759', Z2: '#007aff', Z3: '#ff9500', Z4: '#ff2d55', Z5: '#bf5af2', '-': '#a0a0a0' };
+                        const color = zoneColors[day.zone] ?? '#a0a0a0';
+                        const isRest = day.session === 'Rest';
+                        return (
+                          <div
+                            key={day.key}
+                            style={{ background: `${color}08`, border: `1px solid ${color}25`, borderRadius: '14px', padding: '14px', opacity: isRest ? 0.72 : 1 }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }}>
+                              <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{day.weekdayShort}</span>
+                              <span className="secondary-text" style={{ fontSize: '0.75rem' }}>{day.dateLabel}</span>
+                            </div>
+                            <p style={{ fontWeight: 600, fontSize: '0.92rem', marginBottom: '6px' }}>{day.session}</p>
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                              <span style={{ background: color, color: '#fff', fontSize: '0.65rem', fontWeight: 800, padding: '2px 7px', borderRadius: '6px' }}>{day.zone}</span>
+                              <span style={{ background: 'rgba(255,255,255,0.07)', fontSize: '0.65rem', fontWeight: 700, padding: '2px 7px', borderRadius: '6px' }}>{day.intensity}</span>
+                            </div>
+                            <p style={{ fontSize: '0.8rem', opacity: 0.85 }}>
+                              {day.distance !== '—' ? `${day.distance} · ${day.duration}` : day.duration}
+                            </p>
+                            <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '6px', lineHeight: 1.4 }}>{day.notes}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <button
+                      onClick={() => {
+                        const goalLabels: Record<string, string> = { fat_loss: 'Fat Loss', endurance: 'Endurance', speed: 'Speed' };
+                        const phases = weekSessions.map((day) => ({
+                          phase: `${day.weekdayShort} ${day.dateLabel} · ${day.session}`,
+                          duration: day.duration,
+                          zone: day.zone === '-' ? 'Z1' : day.zone,
+                          hr_range: day.zone === '-' ? '—' : day.zone,
+                          pace: day.distance,
+                          notes: day.notes,
+                        }));
+                        void persistTrainingPlan(
+                          `${goalLabels[trainingGoal ?? ''] ?? 'Plan'} · ${weekSessions[0].key} → ${weekSessions[6].key}`,
+                          phases,
+                        ).then(() => {
+                          setPlanNotice(t.planSaved);
+                          window.setTimeout(() => setPlanNotice(null), 4000);
+                        });
+                      }}
+                      style={{ marginTop: '14px', width: '100%', background: 'rgba(0, 122, 255, 0.12)', color: '#007aff', border: '1px solid rgba(0, 122, 255, 0.24)', padding: '10px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      {lang === 'ru' ? 'Сохранить неделю' : 'Save week'}
+                    </button>
                   </div>
                 )}
 
@@ -2095,14 +3074,15 @@ export default function Home() {
                       ))}
                       <div>
                         <label className="secondary-text" style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem' }}>
-                          {lang === 'ru' ? 'Пороговый темп (сек/км)' : 'Threshold Pace (sec/km)'}
+                          {lang === 'ru' ? 'Пороговый темп (мин/км)' : 'Threshold Pace (min/km)'}
                         </label>
                         <input
                           type="number"
+                          step="0.1"
                           value={preferences.thresholdPace}
                           onChange={(e) => setPreferences({
                             ...preferences,
-                            thresholdPace: parseInt(e.target.value) || 0
+                            thresholdPace: Number.parseFloat(e.target.value) || 0
                           })}
                           style={{
                             width: '100%',
@@ -2116,7 +3096,7 @@ export default function Home() {
                           }}
                         />
                         <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '6px' }}>
-                           {lang === 'ru' ? 'Например: 300 для темпа 5:00/км' : 'Example: 300 for 5:00/km pace'}
+                           {lang === 'ru' ? 'Например: 5.0 для темпа 5:00/км. Используется AI-тренером.' : 'Example: 5.0 for 5:00/km pace. Used by the AI coach.'}
                         </p>
                       </div>
                     </div>
@@ -2172,10 +3152,60 @@ export default function Home() {
                     </div>
                 </div>
                 <div className="premium-card">
+                    <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'AI-модель (Ollama)' : 'AI Model (Ollama)'}</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                      <div>
+                        <label className="secondary-text" style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem' }}>
+                          {lang === 'ru' ? 'Текстовая модель' : 'Text model'}
+                        </label>
+                        <select
+                          value={aiModel}
+                          onChange={(event) => persistModelChoice('runform.aiModel', event.target.value, setAiModel)}
+                          style={modelSelectStyle}
+                        >
+                          <option value="">{lang === 'ru' ? 'По умолчанию (qwen3:4b)' : 'Default (qwen3:4b)'}</option>
+                          {modelOptionsFor(aiModel).map((item) => (
+                            <option key={item.name} value={item.name}>
+                              {item.name}
+                              {item.size > 0 ? ` (${(item.size / 1e9).toFixed(1)} GB)` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="secondary-text" style={{ display: 'block', marginBottom: '8px', fontSize: '0.85rem' }}>
+                          {lang === 'ru' ? 'Vision-модель (скриншоты)' : 'Vision model (screenshots)'}
+                        </label>
+                        <select
+                          value={aiVisionModel}
+                          onChange={(event) => persistModelChoice('runform.aiVisionModel', event.target.value, setAiVisionModel)}
+                          style={modelSelectStyle}
+                        >
+                          <option value="">{lang === 'ru' ? 'По умолчанию (qwen2.5-vl:3b)' : 'Default (qwen2.5-vl:3b)'}</option>
+                          {modelOptionsFor(aiVisionModel).map((item) => (
+                            <option key={item.name} value={item.name}>
+                              {item.name}
+                              {item.size > 0 ? ` (${(item.size / 1e9).toFixed(1)} GB)` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <p className="secondary-text" style={{ fontSize: '0.75rem', marginTop: '10px' }}>
+                      {modelsUnavailable
+                        ? (lang === 'ru'
+                            ? 'Ollama не отвечает — список моделей недоступен, но сохранённый выбор продолжает работать.'
+                            : 'Ollama is not responding — the model list is unavailable, but the saved pick still applies.')
+                        : (lang === 'ru'
+                            ? 'Модель остаётся в памяти 30 минут после запроса: повторные ответы приходят сразу. Скачать новую: ollama pull qwen3:4b.'
+                            : 'The model stays loaded for 30 minutes after a request, so repeat answers arrive immediately. Get a new one: ollama pull qwen3:4b.')}
+                    </p>
+                </div>
+                <div className="premium-card">
                     <h3 style={{ marginBottom: '16px' }}>{lang === 'ru' ? 'Приложение' : 'App'}</h3>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span>{lang === 'ru' ? 'Версия' : 'Version'}</span>
-                          <span className="secondary-text">v{APP_VERSION}</span>
+                          <span className="secondary-text">{formatVersionLabel()}</span>
                     </div>
                 </div>
                 <button 

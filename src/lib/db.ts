@@ -1,22 +1,24 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { resolveDataDir } from './data-dir';
 
-// RUNFORM_DATA_DIR can be set to override the data directory location.
-// Falls back to <cwd>/data, which works correctly when the server is started
-// from the project root (npm run dev / next start).
-const DB_DIR = process.env.RUNFORM_DATA_DIR
-  ? path.resolve(process.env.RUNFORM_DATA_DIR)
-  : path.join(process.cwd(), 'data');
+// The data directory resolution lives in ./data-dir.ts:
+//   RUNFORM_DATA_DIR wins, then <cwd>/data, then a platform user-data folder
+//   (needed for packaged builds where the bundle directory is read-only).
+const resolvedDataDir = resolveDataDir();
+const DB_DIR = resolvedDataDir.dir;
 const DB_PATH = path.join(DB_DIR, 'workouts.db');
 
-console.log('[RunForm] DB path:', DB_PATH);
-
+console.log(`[RunForm] DB path: ${DB_PATH} (source: ${resolvedDataDir.source})`);
 
 fs.mkdirSync(DB_DIR, { recursive: true });
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
+// Referential integrity: workouts are referenced by personal_bests, shoes and
+// routes, so orphaned rows must not be possible.
+db.pragma('foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -206,6 +208,48 @@ applyMigration(6, () => {
   if (!existingColumnNames.has('route_id')) {
     db.exec('ALTER TABLE workouts ADD COLUMN route_id TEXT REFERENCES routes(id)');
   }
+});
+
+applyMigration(7, () => {
+  // Personal bests were previously stored as one row per distance with a
+  // UNIQUE(type) constraint that made INSERT OR REPLACE delete the old row.
+  // They are now stored per (distance, condition) — indoor efforts should not
+  // overwrite outdoor records — and are written with plain UPDATE/INSERT.
+  //
+  // The old values were derived from the workout average pace, which made every
+  // distance share the same number, so they are discarded instead of migrated.
+  db.exec('DROP TABLE IF EXISTS personal_bests_legacy');
+  db.exec('ALTER TABLE personal_bests RENAME TO personal_bests_legacy');
+
+  db.exec(`
+    CREATE TABLE personal_bests (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,                -- '1k', '5k', '10k', 'half', 'full'
+      value REAL NOT NULL,               -- best estimated pace in minutes per km
+      workout_uuid TEXT REFERENCES workouts(uuid) ON DELETE CASCADE,
+      achieved_at DATETIME,
+      condition TEXT NOT NULL DEFAULT 'outdoor',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(type, condition)
+    )
+  `);
+
+  db.exec('DROP TABLE personal_bests_legacy');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_personal_bests_type ON personal_bests(type, condition)');
+});
+
+applyMigration(8, () => {
+  // The AI coach chat keeps its history locally, in the same database as the
+  // workouts, so conversations survive reloads.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_chat_messages (
+      id TEXT PRIMARY KEY,
+      role TEXT NOT NULL,          -- 'user' | 'assistant'
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_ai_chat_created ON ai_chat_messages(created_at)');
 });
 
 export default db;

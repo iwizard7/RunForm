@@ -2,12 +2,15 @@
 
 import db from './db';
 import { WorkoutData } from './parser';
-import { parsePaceToMinutes } from './ai';
+import { buildPersonalBestCandidates, selectImprovedRecords } from './personal-best';
+import { computeRouteFingerprint } from './routes';
+import { getWorkoutCondition } from './workout-condition';
 
 interface WorkoutRow {
   uuid: string;
   name: string;
   activity_name: string;
+  activity_type: number;
   start_date: string;
   end_date: string;
   duration: number;
@@ -86,6 +89,7 @@ function mapRowToWorkout(row: Partial<WorkoutRow> & Pick<WorkoutRow, 'uuid' | 'n
     uuid: row.uuid,
     name: row.name ?? 'Workout',
     activityName: row.activity_name ?? row.name ?? 'Workout',
+    activityType: row.activity_type ?? 37,
     startDate: row.start_date,
     endDate: row.end_date,
     duration: row.duration ?? 0,
@@ -125,7 +129,7 @@ function mapRowToWorkout(row: Partial<WorkoutRow> & Pick<WorkoutRow, 'uuid' | 'n
 }
 
 const insertWorkoutStatement = db.prepare(`
-  INSERT OR REPLACE INTO workouts (
+  INSERT INTO workouts (
     uuid, name, activity_name, activity_type, start_date, end_date,
     duration, calories, distance, pace, avg_intensity, min_intensity,
     max_intensity, average_mets, avg_hr, min_hr, max_hr, hrv, cadence,
@@ -135,18 +139,65 @@ const insertWorkoutStatement = db.prepare(`
   ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   )
+  ON CONFLICT(uuid) DO UPDATE SET
+    name = excluded.name,
+    activity_name = excluded.activity_name,
+    activity_type = excluded.activity_type,
+    start_date = excluded.start_date,
+    end_date = excluded.end_date,
+    duration = excluded.duration,
+    calories = excluded.calories,
+    distance = excluded.distance,
+    pace = excluded.pace,
+    avg_intensity = excluded.avg_intensity,
+    min_intensity = excluded.min_intensity,
+    max_intensity = excluded.max_intensity,
+    average_mets = excluded.average_mets,
+    avg_hr = excluded.avg_hr,
+    min_hr = excluded.min_hr,
+    max_hr = excluded.max_hr,
+    hrv = excluded.hrv,
+    cadence = excluded.cadence,
+    steps = excluded.steps,
+    location = excluded.location,
+    source = excluded.source,
+    weather_temp = excluded.weather_temp,
+    weather_hum = excluded.weather_hum,
+    zones_json = excluded.zones_json,
+    pace_zones_json = excluded.pace_zones_json,
+    device_name = excluded.device_name,
+    device_manufacturer = excluded.device_manufacturer,
+    device_model = excluded.device_model,
+    device_hw_version = excluded.device_hw_version,
+    device_sw_version = excluded.device_sw_version,
+    route_json = excluded.route_json
 `);
+// NOTE: shoe_id, tags_json and route_id are deliberately NOT overwritten on
+// conflict. They hold user edits (shoe assignment, tags) or data derived after
+// the insert (route matching), and a re-imported file must never wipe them.
+// An upsert also keeps the row in place, so ON DELETE CASCADE on
+// personal_bests.workout_uuid cannot fire the way INSERT OR REPLACE did.
+
+const workoutExistsStatement = db.prepare('SELECT 1 FROM workouts WHERE uuid = ?');
 
 const selectAllWorkoutsStatement = db.prepare('SELECT * FROM workouts ORDER BY start_date DESC');
 const selectLatestWorkoutStatement = db.prepare('SELECT * FROM workouts ORDER BY start_date DESC LIMIT 1');
 const deleteAllWorkoutsStatement = db.prepare('DELETE FROM workouts');
 
-export async function saveWorkout(data: WorkoutData) {
+export type SaveWorkoutResult = {
+  success: true;
+  /** True when a workout with the same uuid already existed and was replaced. */
+  duplicate: boolean;
+};
+
+export async function saveWorkout(data: WorkoutData): Promise<SaveWorkoutResult> {
+  const duplicate = workoutExistsStatement.get(data.uuid) !== undefined;
+
   insertWorkoutStatement.run(
     data.uuid,
     data.name,
     data.activityName,
-    37,
+    data.activityType ?? 37,
     data.startDate,
     data.endDate,
     data.duration,
@@ -181,10 +232,10 @@ export async function saveWorkout(data: WorkoutData) {
   );
 
   await checkAndStorePBs(data);
-  if (data.route) {
+  if (data.route && data.route.length > 0) {
     await matchAndAssignRoute(data.uuid, JSON.stringify(data.route));
   }
-  return { success: true };
+  return { success: true, duplicate };
 }
 
 export async function getAllWorkouts(): Promise<WorkoutData[]> {
@@ -214,17 +265,28 @@ export async function clearAllWorkouts() {
 
 // === Equipment Tracker (Shoes) ===
 
+type ShoeRow = {
+  id: string;
+  name: string;
+  brand: string | null;
+  model: string | null;
+  max_distance: number | null;
+  distance_run: number | null;
+  is_active: number | null;
+  created_at: string;
+};
+
 export async function getShoes(): Promise<Shoe[]> {
-  const rows = db.prepare('SELECT * FROM shoes ORDER BY created_at DESC').all() as any[];
-  return rows.map(r => ({
-    id: r.id,
-    name: r.name,
-    brand: r.brand,
-    model: r.model,
-    maxDistance: r.max_distance,
-    distanceRun: r.distance_run,
-    isActive: Boolean(r.is_active),
-    createdAt: r.created_at
+  const rows = db.prepare('SELECT * FROM shoes ORDER BY created_at DESC').all() as ShoeRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    brand: row.brand ?? '',
+    model: row.model ?? '',
+    maxDistance: row.max_distance ?? 0,
+    distanceRun: row.distance_run ?? 0,
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
   }));
 }
 
@@ -270,73 +332,237 @@ export async function updateWorkoutTags(workoutId: string, tags: string[]) {
 export interface PersonalBest {
   id: string;
   type: string;
+  /** Best estimated pace in minutes per kilometre. */
   value: number;
   workoutUuid: string;
   achievedAt: string;
+  condition: 'indoor' | 'outdoor';
 }
 
-export async function getPersonalBests(): Promise<PersonalBest[]> {
-  const rows = db.prepare('SELECT * FROM personal_bests').all() as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    type: r.type,
-    value: r.value,
-    workoutUuid: r.workout_uuid,
-    achievedAt: r.achieved_at,
+export async function getPersonalBests(condition?: string): Promise<PersonalBest[]> {
+  const rows = (
+    condition
+      ? db.prepare('SELECT * FROM personal_bests WHERE condition = ? ORDER BY type ASC').all(condition)
+      : db.prepare('SELECT * FROM personal_bests ORDER BY type ASC').all()
+  ) as Array<{
+    id: string;
+    type: string;
+    value: number;
+    workout_uuid: string;
+    achieved_at: string;
+    condition: string;
+  }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    type: row.type,
+    value: row.value,
+    workoutUuid: row.workout_uuid,
+    achievedAt: row.achieved_at,
+    condition: row.condition === 'indoor' ? 'indoor' : 'outdoor',
   }));
 }
 
-export async function checkAndStorePBs(data: WorkoutData) {
-  const pbs = [
-    { type: '1k', value: data.distance >= 1 ? parsePaceToMinutes(data.pace) : null },
-    { type: '5k', value: data.distance >= 5 ? parsePaceToMinutes(data.pace) : null },
-    { type: '10k', value: data.distance >= 10 ? parsePaceToMinutes(data.pace) : null },
-  ];
-
-  for (const pb of pbs) {
-    if (pb.value === null) continue;
-
-    const existing = db.prepare('SELECT value FROM personal_bests WHERE type = ?').get(pb.type) as { value: number } | undefined;
-
-    if (!existing || pb.value < existing.value) {
-      db.prepare(`
-        INSERT OR REPLACE INTO personal_bests (id, type, value, workout_uuid, achieved_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(crypto.randomUUID(), pb.type, pb.value, data.uuid, data.startDate);
-    }
+export async function checkAndStorePBs(data: WorkoutData): Promise<PersonalBest[]> {
+  const candidates = buildPersonalBestCandidates(data);
+  if (candidates.length === 0) {
+    return [];
   }
+
+  const condition = getWorkoutCondition(data.location);
+  const existing = db
+    .prepare('SELECT type, value FROM personal_bests WHERE condition = ?')
+    .all(condition) as Array<{ type: string; value: number }>;
+
+  const improved = selectImprovedRecords(existing, candidates);
+  const updateStatement = db.prepare(
+    'UPDATE personal_bests SET value = ?, workout_uuid = ?, achieved_at = ? WHERE type = ? AND condition = ?',
+  );
+  const insertStatement = db.prepare(
+    'INSERT INTO personal_bests (id, type, value, workout_uuid, achieved_at, condition) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+
+  const stored: PersonalBest[] = [];
+  for (const candidate of improved) {
+    const updated = updateStatement.run(
+      candidate.paceMinutes,
+      data.uuid,
+      data.startDate,
+      candidate.type,
+      condition,
+    );
+
+    if (updated.changes === 0) {
+      insertStatement.run(
+        crypto.randomUUID(),
+        candidate.type,
+        candidate.paceMinutes,
+        data.uuid,
+        data.startDate,
+        condition,
+      );
+    }
+
+    stored.push({
+      id: `${candidate.type}-${condition}`,
+      type: candidate.type,
+      value: candidate.paceMinutes,
+      workoutUuid: data.uuid,
+      achievedAt: data.startDate,
+      condition,
+    });
+  }
+
+  return stored;
+}
+
+/**
+ * Rebuilds personal bests from the stored workout history.
+ *
+ * Migration 7 discarded the old records because they were derived from the
+ * workout average pace and gave every distance the same value. This replays the
+ * history in chronological order so the table is populated again without
+ * requiring a manual re-import.
+ */
+export async function backfillPersonalBests(): Promise<{ success: true; records: number }> {
+  const rows = db.prepare('SELECT * FROM workouts ORDER BY start_date ASC').all() as WorkoutRow[];
+
+  const rebuild = db.transaction((workouts: WorkoutRow[]) => {
+    const deleteStatement = db.prepare('DELETE FROM personal_bests');
+    const selectExistingStatement = db.prepare(
+      'SELECT type, value FROM personal_bests WHERE condition = ?',
+    );
+    const updateStatement = db.prepare(
+      'UPDATE personal_bests SET value = ?, workout_uuid = ?, achieved_at = ? WHERE type = ? AND condition = ?',
+    );
+    const insertStatement = db.prepare(
+      'INSERT INTO personal_bests (id, type, value, workout_uuid, achieved_at, condition) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+
+    deleteStatement.run();
+    for (const row of workouts) {
+      const workout = mapRowToWorkout(row);
+      const condition = getWorkoutCondition(workout.location);
+      const candidates = buildPersonalBestCandidates(workout);
+      if (candidates.length === 0) {
+        continue;
+      }
+
+      const existing = selectExistingStatement.all(condition) as Array<{ type: string; value: number }>;
+      const improved = selectImprovedRecords(existing, candidates);
+
+      for (const candidate of improved) {
+        const updated = updateStatement.run(
+          candidate.paceMinutes,
+          workout.uuid,
+          workout.startDate,
+          candidate.type,
+          condition,
+        );
+
+        if (updated.changes === 0) {
+          insertStatement.run(
+            crypto.randomUUID(),
+            candidate.type,
+            candidate.paceMinutes,
+            workout.uuid,
+            workout.startDate,
+            condition,
+          );
+        }
+      }
+    }
+  });
+
+  rebuild(rows);
+
+  const count = (db.prepare('SELECT COUNT(*) AS count FROM personal_bests').get() as { count: number }).count;
+  return { success: true, records: count };
+}
+
+/**
+ * Runs the one-time backfill only while the personal-bests table is empty.
+ *
+ * The dashboard used to replay the whole history on every page load, which was
+ * wasteful and raced between open tabs. New saves keep the table up to date via
+ * checkAndStorePBs, so a rebuild is only needed when the table was wiped
+ * (migration 7 or a manual reset).
+ */
+export async function ensurePersonalBests(): Promise<{ rebuilt: boolean; records: number }> {
+  const count = (db.prepare('SELECT COUNT(*) AS count FROM personal_bests').get() as { count: number }).count;
+  if (count > 0) {
+    return { rebuilt: false, records: count };
+  }
+
+  const result = await backfillPersonalBests();
+  return { rebuilt: true, records: result.records };
 }
 
 // === Training Plans ===
+
+export interface TrainingSession {
+  day?: string;
+  date?: string;
+  type?: string;
+  phase?: string;
+  duration?: string;
+  zone?: string;
+  hr_range?: string;
+  pace?: string;
+  notes?: string;
+}
 
 export interface TrainingPlan {
   id: string;
   goal: string;
   status: string;
-  sessions: any[];
+  sessions: TrainingSession[];
   startDate: string;
   endDate?: string;
 }
 
+type TrainingPlanRow = {
+  id: string;
+  goal: string;
+  status: string | null;
+  sessions_json: string | null;
+  start_date: string;
+  end_date: string | null;
+};
+
 export async function getTrainingPlans(): Promise<TrainingPlan[]> {
-  const rows = db.prepare('SELECT * FROM training_plans ORDER BY created_at DESC').all() as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    goal: r.goal,
-    status: r.status,
-    sessions: JSON.parse(r.sessions_json || '[]'),
-    startDate: r.start_date,
-    endDate: r.end_date,
+  const rows = db.prepare('SELECT * FROM training_plans ORDER BY created_at DESC').all() as TrainingPlanRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    goal: row.goal,
+    status: row.status ?? 'active',
+    sessions: parseJsonValue<TrainingSession[]>(row.sessions_json, []),
+    startDate: row.start_date,
+    endDate: row.end_date ?? undefined,
   }));
 }
 
-export async function saveTrainingPlan(goal: string, sessions: any[]) {
+export async function saveTrainingPlan(goal: string, sessions: TrainingSession[]) {
   const id = crypto.randomUUID();
   db.prepare(`
     INSERT INTO training_plans (id, goal, sessions_json)
     VALUES (?, ?, ?)
   `).run(id, goal, JSON.stringify(sessions));
-  return { success: true, id };
+  return { success: true as const, id };
+}
+
+export async function updateTrainingPlanStatus(planId: string, status: 'active' | 'completed' | 'cancelled') {
+  db.prepare('UPDATE training_plans SET status = ?, end_date = CASE WHEN ? = \'active\' THEN NULL ELSE CURRENT_TIMESTAMP END WHERE id = ?').run(
+    status,
+    status,
+    planId,
+  );
+  return { success: true as const };
+}
+
+export async function deleteTrainingPlan(planId: string) {
+  db.prepare('DELETE FROM training_plans WHERE id = ?').run(planId);
+  return { success: true as const };
 }
 
 // === Body Metrics ===
@@ -351,16 +577,26 @@ export interface BodyMetric {
   notes?: string;
 }
 
+type BodyMetricRow = {
+  id: string;
+  date: string;
+  weight: number | null;
+  muscle_mass: number | null;
+  fat_percentage: number | null;
+  soreness_level: number | null;
+  notes: string | null;
+};
+
 export async function getBodyMetrics(): Promise<BodyMetric[]> {
-  const rows = db.prepare('SELECT * FROM body_metrics ORDER BY date DESC').all() as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    date: r.date,
-    weight: r.weight,
-    muscleMass: r.muscle_mass,
-    fatPercentage: r.fat_percentage,
-    sorenessLevel: r.soreness_level,
-    notes: r.notes,
+  const rows = db.prepare('SELECT * FROM body_metrics ORDER BY date DESC').all() as BodyMetricRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    date: row.date,
+    weight: row.weight ?? undefined,
+    muscleMass: row.muscle_mass ?? undefined,
+    fatPercentage: row.fat_percentage ?? undefined,
+    sorenessLevel: row.soreness_level ?? undefined,
+    notes: row.notes ?? undefined,
   }));
 }
 
@@ -380,36 +616,150 @@ export interface Route {
   name: string;
   fingerprint: string;
   distance: number;
+  runCount: number;
+  lastRunAt: string | null;
 }
 
+type RouteRow = {
+  id: string;
+  name: string;
+  fingerprint: string;
+  distance: number | null;
+  run_count: number;
+  last_run_at: string | null;
+};
+
 export async function getRoutes(): Promise<Route[]> {
-  const rows = db.prepare('SELECT * FROM routes').all() as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    fingerprint: r.fingerprint,
-    distance: r.distance,
+  const rows = db
+    .prepare(`
+      SELECT
+        routes.id,
+        routes.name,
+        routes.fingerprint,
+        routes.distance,
+        COUNT(workouts.uuid) AS run_count,
+        MAX(workouts.start_date) AS last_run_at
+      FROM routes
+      LEFT JOIN workouts ON workouts.route_id = routes.id
+      GROUP BY routes.id
+      ORDER BY run_count DESC, routes.created_at ASC
+    `)
+    .all() as RouteRow[];
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    fingerprint: row.fingerprint,
+    distance: row.distance ?? 0,
+    runCount: row.run_count,
+    lastRunAt: row.last_run_at,
   }));
 }
 
-export async function matchAndAssignRoute(workoutUuid: string, routeJson: string) {
-  if (!routeJson) return;
-  
-  // Very simple "Route Intelligence": use first coordinate as fingerprint for now
-  // In a real app, this would be a geometric simplify + hash
-  const coords = JSON.parse(routeJson);
-  if (!coords || coords.length === 0) return;
-  
-  const fingerprint = `${coords[0].lat.toFixed(4)},${coords[0].lng.toFixed(4)}`;
-  
-  let route = db.prepare('SELECT id FROM routes WHERE fingerprint = ?').get(fingerprint) as { id: string } | undefined;
-  
-  if (!route) {
-    const id = crypto.randomUUID();
-    db.prepare('INSERT INTO routes (id, name, fingerprint) VALUES (?, ?, ?)').run(id, 'New Route', fingerprint);
-    route = { id };
+export async function renameRoute(routeId: string, name: string) {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) {
+    return { success: false as const, error: 'Route name cannot be empty' };
   }
-  
-  db.prepare('UPDATE workouts SET route_id = ? WHERE uuid = ?').run(route.id, workoutUuid);
-  return { success: true, routeId: route.id };
+  db.prepare('UPDATE routes SET name = ? WHERE id = ?').run(trimmed, routeId);
+  return { success: true as const };
+}
+
+/**
+ * Matches a workout GPS track to an existing route by geometric fingerprint,
+ * creating the route when it is not known yet.
+ */
+export async function matchAndAssignRoute(workoutUuid: string, routeJson: string) {
+  if (!routeJson) {
+    return { success: false as const, error: 'No route data' };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(routeJson);
+  } catch {
+    return { success: false as const, error: 'Route data is not valid JSON' };
+  }
+
+  const points = Array.isArray(parsed) ? parsed : [];
+  const fingerprint = computeRouteFingerprint(points);
+  if (!fingerprint) {
+    return { success: false as const, error: 'Track too short to identify a route' };
+  }
+
+  const existing = db.prepare('SELECT id FROM routes WHERE fingerprint = ?').get(fingerprint) as
+    | { id: string }
+    | undefined;
+
+  let routeId = existing?.id;
+  if (!routeId) {
+    routeId = crypto.randomUUID();
+    const routeCount = (db.prepare('SELECT COUNT(*) AS count FROM routes').get() as { count: number }).count;
+    db.prepare('INSERT INTO routes (id, name, fingerprint) VALUES (?, ?, ?)').run(
+      routeId,
+      `Route ${routeCount + 1}`,
+      fingerprint,
+    );
+  }
+
+  db.prepare('UPDATE workouts SET route_id = ? WHERE uuid = ?').run(routeId, workoutUuid);
+  return { success: true as const, routeId };
+}
+
+// === AI Coach Chat ===
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+type ChatRow = {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+};
+
+/** Returns the most recent chat messages in chronological order. */
+export async function getChatMessages(limit = 50): Promise<ChatMessage[]> {
+  const bounded = Math.max(1, Math.min(200, limit));
+  // rowid keeps insertion order stable even when several messages share the
+  // same second-resolution created_at timestamp. It must be selected
+  // explicitly: `SELECT *` never includes the implicit rowid column.
+  const rows = db
+    .prepare(
+      `SELECT id, role, content, created_at FROM (
+         SELECT rowid AS position, id, role, content, created_at
+         FROM ai_chat_messages ORDER BY rowid DESC LIMIT ?
+       ) ORDER BY position ASC`,
+    )
+    .all(bounded) as ChatRow[];
+
+  return rows.map((row) => ({
+    id: row.id,
+    role: row.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+    content: row.content,
+    createdAt: row.created_at,
+  }));
+}
+
+export async function addChatMessage(role: 'user' | 'assistant', content: string) {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { success: false as const, error: 'Message cannot be empty' };
+  }
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO ai_chat_messages (id, role, content) VALUES (?, ?, ?)').run(
+    id,
+    role === 'assistant' ? 'assistant' : 'user',
+    trimmed,
+  );
+  return { success: true as const, id };
+}
+
+export async function clearChatMessages() {
+  db.prepare('DELETE FROM ai_chat_messages').run();
+  return { success: true as const };
 }

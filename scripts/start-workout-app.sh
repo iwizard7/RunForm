@@ -93,7 +93,21 @@ kill_stuck_app_if_needed() {
   fi
 }
 
+verify_node_runtime() {
+  cd "$PROJECT_DIR"
+
+  if ! node -e "require('better-sqlite3')" >/dev/null 2>&1; then
+    log "Текущий Node ($(node -v)) не может загрузить better-sqlite3: нативный модуль собран под другую версию Node."
+    log "Варианты исправления:"
+    log "  1. Переключитесь на Node 20: nvm use (файл .nvmrc) или asdf install"
+    log "  2. Либо пересоберите модуль под текущую версию: npm rebuild better-sqlite3"
+    exit 1
+  fi
+}
+
 main() {
+  verify_node_runtime
+
   if is_ollama_ready; then
     log "Ollama уже запущена"
   else

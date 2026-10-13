@@ -1,7 +1,7 @@
 "use client";
 
 import { WorkoutData } from '@/lib/parser';
-import { Language } from '@/lib/translations';
+import { Language, translations } from '@/lib/translations';
 import { VersusSummary } from '@/lib/ai';
 
 type Props = {
@@ -11,6 +11,8 @@ type Props = {
 };
 
 export function VersusSummaryCard({ lang, selectedWorkouts, summary }: Props) {
+  const t = translations[lang];
+
   if (!summary || selectedWorkouts.length !== 2) {
     return null;
   }
@@ -18,7 +20,7 @@ export function VersusSummaryCard({ lang, selectedWorkouts, summary }: Props) {
   return (
     <div className="premium-card" style={{ marginTop: '24px', display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '20px', borderColor: 'rgba(88,86,214,0.22)', background: 'linear-gradient(135deg, rgba(88, 86, 214, 0.08) 0%, rgba(0, 122, 255, 0.04) 100%)' }}>
       <div>
-        <p className="secondary-text" style={{ marginBottom: '8px' }}>{lang === 'ru' ? 'AI-сравнение' : 'AI comparison'}</p>
+        <p className="secondary-text" style={{ marginBottom: '8px' }}>{t.vsSummary}</p>
         <h3 style={{ marginBottom: '12px' }}>{lang === 'ru' ? 'Краткий разбор' : 'Quick breakdown'}</h3>
         <p style={{ color: '#d7ddea', lineHeight: 1.6, marginBottom: '12px' }}>{summary.overall}</p>
         <p style={{ color: '#c5cfdd', lineHeight: 1.6, marginBottom: '12px' }}>{summary.deepSummary}</p>

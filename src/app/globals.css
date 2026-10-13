@@ -191,3 +191,9 @@ h1, h2, h3, h4 {
 .animate-fade-in {
   animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Delayed "model is still loading" hint inside AI cards. */
+@keyframes slowHintFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

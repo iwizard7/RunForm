@@ -11,6 +11,7 @@ export interface WorkoutData {
   uuid: string;
   name: string;
   activityName: string;
+  activityType?: number;
   startDate: string;
   endDate: string;
   duration: number;
@@ -44,13 +45,145 @@ export interface WorkoutData {
   };
   shoeId?: string;
   tags?: string[];
-  route?: Array<{lat: number, lng: number, hr?: number}>;
+  route?: RoutePoint[];
   routeId?: string;
 }
 
 interface WorkoutMetric<T> {
   value: T;
   unit?: string;
+}
+
+export type RoutePoint = {
+  lat: number;
+  lng: number;
+  hr?: number;
+  /** Sample time in epoch milliseconds when the device exported one. */
+  t?: number;
+};
+
+type RawRoutePoint = {
+  lat?: number | string;
+  lng?: number | string;
+  lon?: number | string;
+  latitude?: number | string;
+  longitude?: number | string;
+  hr?: number | string;
+  heartRate?: number | string;
+  heart_rate?: number | string;
+  t?: number | string;
+  timestamp?: number | string;
+  time?: number | string;
+};
+
+type RawSample = {
+  location?: RawRoutePoint[];
+  locations?: RawRoutePoint[];
+  route?: RawRoutePoint[];
+};
+
+function toFiniteNumber(value: number | string | undefined): number | null {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Normalizes the many timestamp shapes exported by devices (epoch seconds,
+ * epoch milliseconds, ISO strings) into epoch milliseconds. Small numbers are
+ * ambiguous (they may be elapsed seconds), so they are dropped: per-kilometre
+ * pace is only computed when every sample has a confident absolute time.
+ */
+function toEpochMs(value: number | string | undefined): number | null {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+      return toEpochMs(Number.parseFloat(trimmed));
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  if (value > 1e12) {
+    return value; // epoch milliseconds
+  }
+  if (value > 1e9) {
+    return value * 1000; // epoch seconds
+  }
+  return null; // ambiguous small value — ignored
+}
+
+function normalizeRoutePoints(points: unknown): RoutePoint[] {
+  if (!Array.isArray(points)) {
+    return [];
+  }
+
+  const route: RoutePoint[] = [];
+  for (const candidate of points) {
+    if (!candidate || typeof candidate !== 'object') {
+      continue;
+    }
+    const point = candidate as RawRoutePoint;
+    const lat = toFiniteNumber(point.lat ?? point.latitude);
+    const lng = toFiniteNumber(point.lng ?? point.lon ?? point.longitude);
+    if (lat === null || lng === null) {
+      continue;
+    }
+    const hr = toFiniteNumber(point.hr ?? point.heartRate ?? point.heart_rate);
+    const t = toEpochMs(point.t ?? point.timestamp ?? point.time);
+    const normalized: RoutePoint = hr === null ? { lat, lng } : { lat, lng, hr: Math.round(hr) };
+    if (t !== null) {
+      normalized.t = t;
+    }
+    route.push(normalized);
+  }
+
+  return route;
+}
+
+/**
+ * Extracts a GPS track from the many shapes exported by fitness devices:
+ * a top-level `route` / `locations` / `routePoints` array, or samples nested
+ * inside `exercises`. Returns an empty array when the payload has no GPS data.
+ */
+export function extractRoute(json: unknown): RoutePoint[] {
+  if (!json || typeof json !== 'object') {
+    return [];
+  }
+
+  const source = json as {
+    route?: unknown;
+    locations?: unknown;
+    routePoints?: unknown;
+    exercises?: Array<{ samples?: RawSample | RawSample[] }>;
+  };
+
+  const topLevel = normalizeRoutePoints(source.route ?? source.locations ?? source.routePoints);
+  if (topLevel.length > 0) {
+    return topLevel;
+  }
+
+  for (const exercise of source.exercises ?? []) {
+    const samples = exercise?.samples;
+    const sampleList = Array.isArray(samples) ? samples : samples ? [samples] : [];
+    for (const sample of sampleList) {
+      const nested = normalizeRoutePoints(sample?.location ?? sample?.locations ?? sample?.route);
+      if (nested.length > 0) {
+        return nested;
+      }
+    }
+  }
+
+  return [];
 }
 
 interface RawWorkoutData {
@@ -91,13 +224,20 @@ interface RawWorkoutData {
     hardwareVersion?: string;
     softwareVersion?: string;
   };
+  route?: unknown;
+  locations?: unknown;
+  routePoints?: unknown;
+  exercises?: Array<{ samples?: unknown }>;
 }
 
 export function parseWorkoutJSON(json: RawWorkoutData): WorkoutData {
+  const route = extractRoute(json);
+
   return {
     uuid: json.uuid || crypto.randomUUID(),
     name: json.name || 'Workout',
     activityName: json.activity?.name || json.name || 'Workout',
+    activityType: json.activity?.type,
     startDate: json.startDate || new Date().toISOString(),
     endDate: json.endDate || json.startDate || new Date().toISOString(),
     duration: json.duration?.value || 0,
@@ -129,5 +269,6 @@ export function parseWorkoutJSON(json: RawWorkoutData): WorkoutData {
       hardwareVersion: json.device?.hardwareVersion || 'Unknown',
       softwareVersion: json.device?.softwareVersion || 'Unknown',
     },
+    route,
   };
 }

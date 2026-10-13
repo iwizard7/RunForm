@@ -1,7 +1,7 @@
 "use client";
 
 import { formatPaceMinutes, NextResultPrediction } from '@/lib/ai';
-import { Language } from '@/lib/translations';
+import { Language, translations } from '@/lib/translations';
 
 type Props = {
   lang: Language;
@@ -12,6 +12,8 @@ type Props = {
 };
 
 export function NextWorkoutInsights({ lang, weeklyLoadLabel, recoveryLabel, healthFlagsCount, nextResultPrediction }: Props) {
+  const t = translations[lang];
+
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginTop: '16px' }}>
@@ -31,7 +33,7 @@ export function NextWorkoutInsights({ lang, weeklyLoadLabel, recoveryLabel, heal
 
       {nextResultPrediction && (
         <div className="premium-card" style={{ marginTop: '20px', background: 'rgba(0,122,255,0.06)', border: '1px solid rgba(0,122,255,0.16)' }}>
-          <p className="secondary-text" style={{ marginBottom: '8px' }}>{lang === 'ru' ? 'AI-прогноз следующей сессии' : 'AI next-session forecast'}</p>
+          <p className="secondary-text" style={{ marginBottom: '8px' }}>{t.nextResultForecast}</p>
           <p style={{ lineHeight: 1.6 }}>
             {lang === 'ru'
               ? `Если сохранить текущий фон, следующая комфортная сессия ожидается около ${nextResultPrediction.distance.toFixed(1)} км в районе ${formatPaceMinutes(nextResultPrediction.pace)} со средним пульсом около ${nextResultPrediction.avgHr} bpm.`

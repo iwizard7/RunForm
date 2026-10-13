@@ -15,7 +15,20 @@ export function useWorkoutExports(workout: WorkoutData | null, lang: Language) {
   const reportCardRef = useRef<HTMLDivElement>(null);
 
   const handleExport = async () => {
-    if (!dashboardExportRef.current || !workout) return;
+    if (!workout) {
+      window.alert(lang === 'ru' ? 'Сначала импортируйте тренировку.' : 'Import a workout first.');
+      return;
+    }
+
+    if (!dashboardExportRef.current) {
+      // The export target only exists while the dashboard is on screen.
+      window.alert(
+        lang === 'ru'
+          ? 'Экспорт доступен на дашборде: откройте «Дашборд» и повторите.'
+          : 'Export is available on the dashboard: open “Dashboard” and try again.',
+      );
+      return;
+    }
 
     try {
       const dataUrl = await toPng(dashboardExportRef.current, {

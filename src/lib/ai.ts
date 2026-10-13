@@ -114,7 +114,10 @@ export const defaultPreferences: UserPreferences = {
   thresholdPace: 5.0, // 5:00 min/km
 };
 
-export function getIntensityScore(item: WorkoutData, prefs: UserPreferences = defaultPreferences) {
+// The `prefs` argument is kept for API compatibility: personalised zones are
+// applied on top of these scores elsewhere, not inside them.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function getIntensityScore(item: WorkoutData, _prefs: UserPreferences = defaultPreferences) {
   const zone3 = item.zones.zone3?.rate ?? 0;
   const zone4 = item.zones.zone4?.rate ?? 0;
   const zone5 = (item.zones.zone5?.rate ?? 0) || (item.zones.peak?.rate ?? 0);
@@ -154,7 +157,8 @@ export function getWarmupAnalysis(item: WorkoutData, lang: Language) {
   return { warmupSeconds, warmupRate, controlScore, label };
 }
 
-export function getZoneProfile(item: WorkoutData, lang: Language, prefs: UserPreferences = defaultPreferences) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function getZoneProfile(item: WorkoutData, lang: Language, _prefs: UserPreferences = defaultPreferences) {
   const z1 = item.zones.zone1?.rate ?? 0;
   const z2 = item.zones.zone2?.rate ?? 0;
   const z3 = item.zones.zone3?.rate ?? 0;
@@ -174,28 +178,6 @@ export function getZoneProfile(item: WorkoutData, lang: Language, prefs: UserPre
     return { label: lang === 'ru' ? 'Recovery' : 'Recovery', detail: lang === 'ru' ? 'Тренировка выглядит восстановительной.' : 'This session looks recovery-oriented.', color: '#007aff' };
   }
   return { label: lang === 'ru' ? 'Mixed Session' : 'Mixed Session', detail: lang === 'ru' ? 'Нагрузка смешанная без ярко выраженного профиля.' : 'Mixed load without one dominant profile.', color: '#ff9500' };
-}
-
-export function getPaceZones(item: WorkoutData, prefs: UserPreferences = defaultPreferences) {
-  const paceMinutes = parsePaceToMinutes(item.pace);
-  const tp = prefs.thresholdPace;
-  
-  // Example Pace Zones based on Threshold Pace
-  const zones = {
-    z1: { label: 'Easy', min: tp + 1.5, max: 99 },
-    z2: { label: 'Marathon', min: tp + 0.5, max: tp + 1.5 },
-    z3: { label: 'Threshold', min: tp - 0.1, max: tp + 0.5 },
-    z4: { label: 'Interval', min: tp - 0.4, max: tp - 0.1 },
-    z5: { label: 'Repetition', min: 0, max: tp - 0.4 },
-  };
-
-  let currentZone = 'z1';
-  if (paceMinutes < zones.z5.max) currentZone = 'z5';
-  else if (paceMinutes < zones.z4.max) currentZone = 'z4';
-  else if (paceMinutes < zones.z3.max) currentZone = 'z3';
-  else if (paceMinutes < zones.z2.max) currentZone = 'z2';
-
-  return { paceMinutes, zones, currentZone };
 }
 
 export function getHrvAnalysis(hrv: number | undefined, lang: Language) {
