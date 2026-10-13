@@ -132,7 +132,15 @@ if [[ -f "$ICON_SRC" ]]; then
   rm -rf "$ICONSET"
 fi
 
-# --- 5. Готово -----------------------------------------------------------------
+# --- 5. Регистрация в LaunchServices -------------------------------------------
+# Без неё свежесозданный бандл может не появиться в Launchpad/поиске,
+# пока системный индексатор сам его не заметит.
+LSREG="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [[ -x "$LSREG" ]]; then
+  "$LSREG" -f "$APP" >/dev/null 2>&1 || true
+fi
+
+# --- 6. Готово -----------------------------------------------------------------
 touch "$APP"
 log "Ярлык установлен: $APP (версия $VERSION, проект: $PROJECT_DIR)"
 log "Двойной клик по RunForm.app запускает приложение и открывает его в браузере."

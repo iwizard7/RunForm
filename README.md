@@ -364,7 +364,10 @@ npm run build
 
 ## Changelog
 
-### v0.9.0 (Latest)
+### v0.9.1 (Latest)
+- **Launcher registration**: `install-launcher.sh` now registers the bundle with LaunchServices immediately, so `RunForm.app` shows up in Spotlight and Launchpad right after installation.
+
+### v0.9.0
 - **Desktop shortcut**: `scripts/install-launcher.sh` installs a `RunForm.app` bundle into Applications (custom squircle icon included). Double-clicking it opens the running app or starts the server first; the bootstrap script now installs it automatically.
 - **GitHub Pages landing page**: self-contained `docs/index.html` in the app's dark style — hero, one-command install, features, screenshots and privacy sections, deployed to `https://iwizard7.github.io/RunForm/` by a dedicated workflow.
 - **Landing language switcher**: EN/RU toggle with browser-language auto-detect, `<title>`/meta following the choice and persistence in `localStorage`.
