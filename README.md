@@ -21,10 +21,12 @@ What the bootstrap script does:
 - installs npm dependencies and verifies the native `better-sqlite3` module
 - installs Ollama if missing, starts it, and pulls the default text model
   `qwen3:4b` (~2.6 GB); the vision model for screenshot import is optional
+- installs a **RunForm.app** shortcut into Applications (double-click to launch)
 - builds the production bundle and launches `scripts/start-workout-app.sh`,
   which opens `http://localhost:3000`
 
-After the first setup, just run:
+After the first setup, just double-click **RunForm.app** in Applications —
+it starts the server if needed and opens the app in your browser. Or run:
 
 ```bash
 ~/RunForm/scripts/start-workout-app.sh
@@ -133,7 +135,24 @@ npm ci
 
 ## Running The App
 
-### Recommended: startup helper script
+### Recommended: desktop shortcut
+
+```bash
+./scripts/install-launcher.sh
+```
+
+Installs a `RunForm.app` bundle into `/Applications` (falls back to
+`~/Applications` if you don't have write access) with a custom icon.
+Double-clicking it:
+
+- opens `http://localhost:3000` right away if the server is already running;
+- otherwise starts Ollama/the server via `scripts/start-workout-app.sh`
+  (notification appears while it boots) and opens the browser when ready.
+
+The project path is baked into the shortcut, so re-run the script after
+moving the repository. The bootstrap script installs the shortcut automatically.
+
+### Startup helper script
 
 The repository includes:
 
@@ -345,7 +364,13 @@ npm run build
 
 ## Changelog
 
-### v0.8.0 (Latest)
+### v0.9.0 (Latest)
+- **Desktop shortcut**: `scripts/install-launcher.sh` installs a `RunForm.app` bundle into Applications (custom squircle icon included). Double-clicking it opens the running app or starts the server first; the bootstrap script now installs it automatically.
+- **GitHub Pages landing page**: self-contained `docs/index.html` in the app's dark style — hero, one-command install, features, screenshots and privacy sections, deployed to `https://iwizard7.github.io/RunForm/` by a dedicated workflow.
+- **Landing language switcher**: EN/RU toggle with browser-language auto-detect, `<title>`/meta following the choice and persistence in `localStorage`.
+- **Transparent logo**: the baked-in near-black background of the logo PNG is removed (flood fill from the edges), so the logo blends seamlessly with the app's glass sidebar and the website hero.
+
+### v0.8.0
 - **One-command Mac setup**: `scripts/bootstrap-mac.sh` installs Node 20, dependencies, Ollama and the default model on a clean Mac, then builds and opens the app (`curl | bash` friendly).
 - **Quick Start section** in the README with the single bootstrap command.
 - **CI**: GitHub Actions workflow runs lint, logic tests and a production build on Node 20 (macOS runner) for every push and pull request.

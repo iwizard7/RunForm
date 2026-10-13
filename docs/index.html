@@ -70,7 +70,7 @@
 
     /* ---------- Hero ---------- */
     .hero { padding: 84px 0 56px; text-align: center; }
-    .hero img.logo { width: 108px; height: auto; border-radius: 24px; margin-bottom: 26px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5); }
+    .hero img.logo { width: min(320px, 80vw); height: auto; margin-bottom: 26px; filter: drop-shadow(0 18px 40px rgba(0, 0, 0, 0.55)); }
     .hero h1 { font-size: clamp(2.1rem, 5vw, 3.2rem); line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 18px; }
     .hero h1 .grad {
       background: linear-gradient(92deg, var(--blue) 10%, var(--green) 90%);
@@ -235,15 +235,15 @@
             <span class="dot" style="background:#28c840"></span>
             <span class="label" data-ru="Терминал — одна команда">Terminal — one command</span>
           </div>
-          <pre id="cmd" data-ru="<span class='cm'># ставит Node 20, зависимости, Ollama + модель, собирает и открывает приложение</span>
-<span class='cmd'>curl -fsSL https://raw.githubusercontent.com/iwizard7/RunForm/main/scripts/bootstrap-mac.sh -o /tmp/runform-bootstrap.sh &amp;&amp; bash /tmp/runform-bootstrap.sh</span>"><span class="cm"># installs Node 20, dependencies, Ollama + model, builds &amp; opens the app</span>
+          <pre id="cmd" data-ru="<span class='cm'># ставит Node 20, зависимости, Ollama + модель, ярлык в Applications, открывает приложение</span>
+<span class='cmd'>curl -fsSL https://raw.githubusercontent.com/iwizard7/RunForm/main/scripts/bootstrap-mac.sh -o /tmp/runform-bootstrap.sh &amp;&amp; bash /tmp/runform-bootstrap.sh</span>"><span class="cm"># installs Node 20, deps, Ollama + model, RunForm.app shortcut, opens the app</span>
 <span class="cmd">curl -fsSL https://raw.githubusercontent.com/iwizard7/RunForm/main/scripts/bootstrap-mac.sh -o /tmp/runform-bootstrap.sh &amp;&amp; bash /tmp/runform-bootstrap.sh</span></pre>
           <div class="copy-row">
             <button class="copy-btn" id="copyBtn" type="button" data-ru="Копировать">Copy</button>
           </div>
         </div>
-        <p class="install-note" data-ru="Нужны macOS и Homebrew. Первый запуск качает модель ИИ ~2.6 ГБ — дальше загрузка занимает секунды.">
-          Requires macOS and Homebrew. First run downloads the ~2.6&nbsp;GB AI model — later launches take seconds.
+        <p class="install-note" data-ru="Нужны macOS и Homebrew. Первый запуск качает модель ИИ ~2.6 ГБ и добавляет ярлык RunForm.app в Applications — дальше запуск одной иконкой занимает секунды.">
+          Requires macOS and Homebrew. First run downloads the ~2.6&nbsp;GB AI model and adds a RunForm.app shortcut to Applications — later launches are a single icon double-click away.
         </p>
       </div>
     </section>
