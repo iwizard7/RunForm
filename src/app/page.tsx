@@ -290,9 +290,17 @@ export default function Home() {
   // Тренировочная форма (вкладка «Индекс формы»): CTL/ATL/TSB, стрики, heatmap
   // года, цель и готовность. Всё считается чистыми функциями поверх того же
   // history, что уже есть на клиенте, — мгновенно и без запросов.
+  // Если тренировки заканчиваются старше 90 дней назад, окно графика
+  // расширяется, чтобы показать реальную форму, а не пустую полосу.
+  const trainingLoadSeriesDays = (() => {
+    const last = history.length > 0 ? new Date(history[0].startDate).getTime() : 0;
+    if (!last) return 90;
+    const daysSince = (Date.now() - last) / 86400000;
+    return daysSince > 90 ? Math.min(365, Math.round(daysSince) + 30) : 90;
+  })();
   const trainingLoadSeries = useMemo(
-    () => computeLoadSeries(history, { days: 90, lthr: preferences.lthr ?? null }),
-    [history, preferences.lthr],
+    () => computeLoadSeries(history, { days: trainingLoadSeriesDays, lthr: preferences.lthr ?? null }),
+    [history, preferences.lthr, trainingLoadSeriesDays],
   );
   const streakStats = useMemo(() => computeStreaks(history), [history]);
   const yearHeatmap = useMemo(
