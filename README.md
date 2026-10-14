@@ -364,7 +364,11 @@ npm run build
 
 ## Changelog
 
-### v0.14.1 (Latest)
+### v0.15.0 (Latest)
+- **Plan by start date**: the race-plan generator now has a second mode — «С даты начала». Pick any day to begin training (today included), choose the plan length (4–24 weeks) and sessions per week; the app derives the goal day itself and shows it live in the form («план завершится ориентировочно …»). For runners who know the goal distance but have no race on the calendar yet.
+- **Clearer date rejection**: choosing a race day closer than 4 weeks no longer produces a bare rule restatement — the message names the actual gap («До старта 11 дней…») and points to the start-date mode, and the form itself shows the hint inline before you even press the button.
+
+### v0.14.1
 - **Race-plan overview fix**: qwen3 spends ~1000 hidden reasoning tokens before any visible answer, so the overview request's tight 400-token cap cut it off mid-think and saved an empty comment. The cap now covers thinking plus answer, with `/no_think` in the prompt.
 
 ### v0.14.0

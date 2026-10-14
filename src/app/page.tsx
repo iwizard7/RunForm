@@ -83,7 +83,7 @@ import { createSegment, deleteSegment, getSegmentEfforts, getSegmentsForRoute } 
 import type { SegmentEffortEntry, SegmentSummary, TrainingSession } from '@/lib/actions';
 import { formatEffortPace, formatEffortTime, haversineKm } from '@/lib/segments';
 import { useRacePlan } from '@/hooks/useRacePlan';
-import { RACE_DISTANCES, groupSessionsByWeek } from '@/lib/race-plan';
+import { RACE_DISTANCES, groupSessionsByWeek, planEndDate, weeksUntilRace } from '@/lib/race-plan';
 import { useWorkoutData } from '@/hooks/useWorkoutData';
 import { useRunFormData } from '@/hooks/useRunFormData';
 import { useAiCoach } from '@/hooks/useAiCoach';
@@ -193,11 +193,17 @@ export default function Home() {
   // runner input; dates and week counts are pinned locally before the model
   // is asked to fill the sessions in.
   const [raceDistanceKey, setRaceDistanceKey] = useState('half');
+  // 'race' counts weeks down to a fixed race day; 'start' begins on any day
+  // the runner picks (today included) and runs for a chosen number of weeks —
+  // for people who have a goal distance but no startet yet.
+  const [raceMode, setRaceMode] = useState<'race' | 'start'>('race');
   const [raceDate, setRaceDate] = useState(() => {
     const defaultDate = new Date();
     defaultDate.setDate(defaultDate.getDate() + 84);
     return defaultDate.toISOString().slice(0, 10);
   });
+  const [raceStartDate, setRaceStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [raceStartWeeks, setRaceStartWeeks] = useState(12);
   const [raceDaysPerWeek, setRaceDaysPerWeek] = useState(4);
   // Post-run notes (history tab): inline editor with optional dictation.
   const [noteEditorUuid, setNoteEditorUuid] = useState<string | null>(null);
@@ -3192,10 +3198,33 @@ export default function Home() {
                   <h3 style={{ fontSize: '1.05rem' }}>{lang === 'ru' ? 'План под старт' : 'Race plan'}</h3>
                   <p className="secondary-text" style={{ fontSize: '0.82rem', marginTop: '4px' }}>
                     {lang === 'ru'
-                      ? 'Периодизированный план от сегодня до целевого старта: фазы, длинные забеги, тейпер. Приложение считает даты и объём, модель заполняет занятия.'
-                      : 'A periodized plan from today to your target race: phases, long runs, taper. The app pins dates and volume, the model fills in the sessions.'}
+                      ? 'Двигайтесь к дате старта или начните с любого дня и задайте длительность сами. Фазы, длинные забеги и тейпер считает приложение; модель пишет короткий обзор.'
+                      : 'Count down to a race day, or start on any day and set the length yourself. The app pins phases, long runs and the taper; the model writes a short overview.'}
                   </p>
                 </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+                {([
+                  { key: 'race', label: lang === 'ru' ? 'К дате старта' : 'To race day' },
+                  { key: 'start', label: lang === 'ru' ? 'С даты начала' : 'From a start day' },
+                ] as const).map((modeOption) => (
+                  <button
+                    key={modeOption.key}
+                    onClick={() => setRaceMode(modeOption.key)}
+                    style={{
+                      background: raceMode === modeOption.key ? 'rgba(88, 86, 214, 0.25)' : 'rgba(255,255,255,0.04)',
+                      color: raceMode === modeOption.key ? '#a5a3ff' : 'inherit',
+                      border: `1px solid ${raceMode === modeOption.key ? 'rgba(165, 163, 255, 0.45)' : 'rgba(255,255,255,0.08)'}`,
+                      padding: '8px 14px',
+                      borderRadius: '999px',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      fontSize: '0.82rem',
+                    }}
+                  >
+                    {modeOption.label}
+                  </button>
+                ))}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -3212,15 +3241,41 @@ export default function Home() {
                     ))}
                   </select>
                 </label>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Дата старта' : 'Race day'}</span>
-                  <input
-                    type="date"
-                    value={raceDate}
-                    onChange={(event) => setRaceDate(event.target.value)}
-                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
-                  />
-                </label>
+                {raceMode === 'race' ? (
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Дата старта' : 'Race day'}</span>
+                    <input
+                      type="date"
+                      value={raceDate}
+                      onChange={(event) => setRaceDate(event.target.value)}
+                      style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                    />
+                  </label>
+                ) : (
+                  <>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Начать с' : 'Start on'}</span>
+                      <input
+                        type="date"
+                        value={raceStartDate}
+                        onChange={(event) => setRaceStartDate(event.target.value)}
+                        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                      />
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Недель плана' : 'Plan length'}</span>
+                      <select
+                        value={raceStartWeeks}
+                        onChange={(event) => setRaceStartWeeks(Number(event.target.value))}
+                        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                      >
+                        {[4, 6, 8, 10, 12, 16, 20, 24].map((count) => (
+                          <option key={count} value={count}>{count}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                )}
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Тренировок в неделю' : 'Sessions per week'}</span>
                   <select
@@ -3234,9 +3289,43 @@ export default function Home() {
                   </select>
                 </label>
               </div>
+              {(() => {
+                // Live horizon hint, so a rejected date never surprises.
+                if (raceMode === 'start') {
+                  const end = planEndDate(raceStartDate, raceStartWeeks);
+                  return end ? (
+                    <p className="secondary-text" style={{ fontSize: '0.8rem', marginTop: '10px' }}>
+                      {lang === 'ru'
+                        ? `План завершится ориентировочно ${new Date(`${end}T12:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })} — в последнем забеге попробуете целевую дистанцию.`
+                        : `The plan wraps up around ${new Date(`${end}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} — the final run is your goal distance.`}
+                    </p>
+                  ) : null;
+                }
+                const weeks = weeksUntilRace(raceDate);
+                if (weeks) {
+                  return (
+                    <p className="secondary-text" style={{ fontSize: '0.8rem', marginTop: '10px' }}>
+                      {lang === 'ru' ? `Осталось ~${weeks} недель — план впишется в этот горизонт.` : `~${weeks} weeks out — the plan fits that horizon.`}
+                    </p>
+                  );
+                }
+                return (
+                  <p style={{ fontSize: '0.8rem', marginTop: '10px', color: '#ff9500' }}>
+                    {lang === 'ru'
+                      ? 'До этой даты меньше 4 недель — периодизации не хватит. Переключитесь на «С даты начала»: начните тренироваться сейчас, а дату выберете позже.'
+                      : 'Less than 4 weeks out — not enough time to periodize. Switch to “From a start day”: begin training now and pick a date later.'}
+                  </p>
+                );
+              })()}
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '14px', flexWrap: 'wrap' }}>
                 <button
-                  onClick={() => void generateRacePlan({ distanceKey: raceDistanceKey, raceDate, daysPerWeek: raceDaysPerWeek })}
+                  onClick={() =>
+                    void generateRacePlan(
+                      raceMode === 'start'
+                        ? { distanceKey: raceDistanceKey, daysPerWeek: raceDaysPerWeek, mode: 'start', startDate: raceStartDate, startWeeks: raceStartWeeks }
+                        : { distanceKey: raceDistanceKey, daysPerWeek: raceDaysPerWeek, mode: 'race', raceDate },
+                    )
+                  }
                   disabled={isRaceLoading}
                   style={{
                     background: '#5856d6',

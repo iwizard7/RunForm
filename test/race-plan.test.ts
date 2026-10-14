@@ -2,11 +2,13 @@ import { assert, assertEqual, group, summarize, test } from './harness';
 import {
   RACE_DISTANCES,
   buildRacePlanTemplate,
+  daysUntilRace,
   derivePhase,
   estimateDurationMin,
   expandRaceSession,
   groupSessionsByWeek,
   parseDistanceKm,
+  planEndDate,
   weeksUntilRace,
 } from '@/lib/race-plan';
 
@@ -39,6 +41,20 @@ test('the plan length is the week count, floored at four weeks', () => {
 
 test('very distant races clamp to 24 weeks', () => {
   assertEqual(weeksUntilRace(isoIn(365), TODAY), 24, 'a year out clamps to 24');
+});
+
+test('daysUntilRace reports the raw gap for the rejection message', () => {
+  assertEqual(daysUntilRace(isoIn(11), TODAY), 11, 'eleven days out');
+  assertEqual(daysUntilRace(isoIn(-3), TODAY), -3, 'past dates go negative');
+  assertEqual(daysUntilRace('garbage', TODAY), null, 'malformed date rejected');
+});
+
+group('race-plan: planEndDate');
+
+test('a start-date plan ends on the last day of its final week', () => {
+  assertEqual(planEndDate('2026-10-20', 12), '2027-01-11', 'twelve weeks from October 20');
+  assertEqual(planEndDate('2026-10-20', 4), '2026-11-16', 'four weeks from October 20');
+  assertEqual(planEndDate('not-a-date', 8), '', 'malformed start date yields empty string');
 });
 
 group('race-plan: derivations');

@@ -38,6 +38,29 @@ export function weeksUntilRace(raceDate: string, today = new Date()): number | n
   return Math.min(24, Math.max(4, Math.round(days / 7)));
 }
 
+/**
+ * Calendar days from today to race day; negative once the date has passed.
+ * The generator's rejection message uses it to say *why* a date failed
+ * instead of just restating the 4..24 week rule.
+ */
+export function daysUntilRace(raceDate: string, today = new Date()): number | null {
+  const target = new Date(`${raceDate}T12:00:00`);
+  if (Number.isNaN(target.getTime())) return null;
+  return Math.round((target.getTime() - today.getTime()) / DAY_MS);
+}
+
+/**
+ * The day a plan starting on `startDate` and spanning `weeks` weeks ends on:
+ * the goal effort sits in the last day of the final week. Empty string for a
+ * malformed start date.
+ */
+export function planEndDate(startDate: string, weeks: number): string {
+  const start = new Date(`${startDate}T12:00:00`);
+  if (Number.isNaN(start.getTime())) return '';
+  start.setDate(start.getDate() + weeks * 7 - 1);
+  return start.toISOString().slice(0, 10);
+}
+
 export type RaceSession = {
   week: number;
   phase?: string;
