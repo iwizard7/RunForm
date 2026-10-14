@@ -364,7 +364,10 @@ npm run build
 
 ## Changelog
 
-### v0.15.1 (Latest)
+### v0.16.0 (Latest)
+- **Training plans removed**: the «Планы» tab is gone, together with everything behind it — the race-plan generator («План под старт»), the saved-plans list with completion tracking and AI plan explanations, and the «Сохранить план» / «Сохранить неделю» buttons on the «План на завтра» screen. The local model could not consistently produce correct multi-week plans, so the feature is retired for now and may return later in a different form. Existing saved-plan rows stay untouched in the local database.
+
+### v0.15.1
 - **Race-plan overview no longer comes back empty**: the comment request ran with a 2048-token context, so whenever qwen3's hidden reasoning ran long it hit the context wall before emitting a single visible token. The context now covers the full prediction (4096). Note the overview stays best-effort by design — on an 8 GB machine the model occasionally still runs past the 3-minute budget, and the plan saves without the comment.
 
 ### v0.15.0

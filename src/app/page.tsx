@@ -35,7 +35,6 @@ import {
   Plus,
   X,
   Trophy,
-  CalendarCheck,
   HeartPulse,
   MapPinned,
   Flag,
@@ -80,10 +79,8 @@ import type { BackupEntry, DatabaseInfo } from '@/lib/backup';
 // Route segments: server actions are the same static imports the data hooks
 // use; the math helpers are pure and safe for the client bundle.
 import { createSegment, deleteSegment, getSegmentEfforts, getSegmentsForRoute } from '@/lib/actions';
-import type { SegmentEffortEntry, SegmentSummary, TrainingSession } from '@/lib/actions';
+import type { SegmentEffortEntry, SegmentSummary } from '@/lib/actions';
 import { formatEffortPace, formatEffortTime, haversineKm } from '@/lib/segments';
-import { useRacePlan } from '@/hooks/useRacePlan';
-import { RACE_DISTANCES, groupSessionsByWeek, planEndDate, weeksUntilRace } from '@/lib/race-plan';
 import { useWorkoutData } from '@/hooks/useWorkoutData';
 import { useRunFormData } from '@/hooks/useRunFormData';
 import { useAiCoach } from '@/hooks/useAiCoach';
@@ -155,13 +152,9 @@ export default function Home() {
 
   const {
     personalBests,
-    trainingPlans,
     bodyMetrics,
     routes,
     rebuildPersonalBests,
-    persistTrainingPlan,
-    setPlanStatus,
-    removeTrainingPlan,
     persistBodyMetric,
     setRouteName,
   } = useRunFormData();
@@ -189,28 +182,11 @@ export default function Home() {
   const [segmentStartIdx, setSegmentStartIdx] = useState<number | null>(null);
   const [segmentEndIdx, setSegmentEndIdx] = useState<number | null>(null);
   const [segmentNotice, setSegmentNotice] = useState<string | null>(null);
-  // Race plan generator (plans tab): the race day and weekly frequency are
-  // runner input; dates and week counts are pinned locally before the model
-  // is asked to fill the sessions in.
-  const [raceDistanceKey, setRaceDistanceKey] = useState('half');
-  // 'race' counts weeks down to a fixed race day; 'start' begins on any day
-  // the runner picks (today included) and runs for a chosen number of weeks —
-  // for people who have a goal distance but no startet yet.
-  const [raceMode, setRaceMode] = useState<'race' | 'start'>('race');
-  const [raceDate, setRaceDate] = useState(() => {
-    const defaultDate = new Date();
-    defaultDate.setDate(defaultDate.getDate() + 84);
-    return defaultDate.toISOString().slice(0, 10);
-  });
-  const [raceStartDate, setRaceStartDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [raceStartWeeks, setRaceStartWeeks] = useState(12);
-  const [raceDaysPerWeek, setRaceDaysPerWeek] = useState(4);
   // Post-run notes (history tab): inline editor with optional dictation.
   const [noteEditorUuid, setNoteEditorUuid] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [noteDictating, setNoteDictating] = useState(false);
   const noteRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const [planNotice, setPlanNotice] = useState<string | null>(null);
   const [dbInfo, setDbInfo] = useState<DatabaseInfo | null>(null);
   const [backupList, setBackupList] = useState<BackupEntry[]>([]);
   const [backupNotice, setBackupNotice] = useState<string | null>(null);
@@ -589,14 +565,6 @@ export default function Home() {
     preferences,
   });
 
-  // Race plan generator: builds multi-week plans toward a target race day and
-  // saves them next to the one-week plans.
-  const { generateRacePlan, isRaceLoading, raceError, racePlanSummary } = useRacePlan({
-    lang,
-    history,
-    persistTrainingPlan,
-  });
-
   const {
     weeklyDigest,
     isDigestLoading,
@@ -607,9 +575,6 @@ export default function Home() {
     readiness,
     isReadinessLoading,
     assessReadiness,
-    planExplanations,
-    explainingPlanId,
-    explainPlan,
     splitsAnalysis,
     isSplitsLoading,
     analyzeSplits,
@@ -993,7 +958,6 @@ export default function Home() {
           <SidebarItem icon={<MessageCircle size={20} />} label={t.chat} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
           <SidebarItem icon={<Zap size={20} />} label={t.nextWorkout} active={activeTab === 'next-workout'} onClick={() => setActiveTab('next-workout')} />
           <SidebarItem icon={<Trophy size={20} />} label={t.records} active={activeTab === 'records'} onClick={() => setActiveTab('records')} />
-          <SidebarItem icon={<CalendarCheck size={20} />} label={t.trainingPlans} active={activeTab === 'plans'} onClick={() => setActiveTab('plans')} />
           <SidebarItem icon={<HeartPulse size={20} />} label={t.health} active={activeTab === 'health'} onClick={() => setActiveTab('health')} />
           <SidebarItem icon={<MapPinned size={20} />} label={t.routes} active={activeTab === 'routes'} onClick={() => setActiveTab('routes')} />
         </nav>
@@ -3180,303 +3144,6 @@ export default function Home() {
           </div>
         )}
 
-        {activeTab === 'plans' && (
-          <div className="animate-fade-in no-print" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <div>
-              <h1 style={{ marginBottom: '8px' }}>{t.trainingPlansTitle}</h1>
-              <p className="secondary-text">
-                {lang === 'ru'
-                  ? 'Планы, сгенерированные локальной моделью на экране «План на завтра», сохраняются здесь.'
-                  : 'Plans generated by the local model on the “Next workout” screen are saved here.'}
-              </p>
-            </div>
-
-            <div className="premium-card">
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '14px' }}>
-                <Sparkles size={18} style={{ color: '#a5a3ff', marginTop: '2px' }} />
-                <div>
-                  <h3 style={{ fontSize: '1.05rem' }}>{lang === 'ru' ? 'План под старт' : 'Race plan'}</h3>
-                  <p className="secondary-text" style={{ fontSize: '0.82rem', marginTop: '4px' }}>
-                    {lang === 'ru'
-                      ? 'Двигайтесь к дате старта или начните с любого дня и задайте длительность сами. Фазы, длинные забеги и тейпер считает приложение; модель пишет короткий обзор.'
-                      : 'Count down to a race day, or start on any day and set the length yourself. The app pins phases, long runs and the taper; the model writes a short overview.'}
-                  </p>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-                {([
-                  { key: 'race', label: lang === 'ru' ? 'К дате старта' : 'To race day' },
-                  { key: 'start', label: lang === 'ru' ? 'С даты начала' : 'From a start day' },
-                ] as const).map((modeOption) => (
-                  <button
-                    key={modeOption.key}
-                    onClick={() => setRaceMode(modeOption.key)}
-                    style={{
-                      background: raceMode === modeOption.key ? 'rgba(88, 86, 214, 0.25)' : 'rgba(255,255,255,0.04)',
-                      color: raceMode === modeOption.key ? '#a5a3ff' : 'inherit',
-                      border: `1px solid ${raceMode === modeOption.key ? 'rgba(165, 163, 255, 0.45)' : 'rgba(255,255,255,0.08)'}`,
-                      padding: '8px 14px',
-                      borderRadius: '999px',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                      fontSize: '0.82rem',
-                    }}
-                  >
-                    {modeOption.label}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Дистанция' : 'Distance'}</span>
-                  <select
-                    value={raceDistanceKey}
-                    onChange={(event) => setRaceDistanceKey(event.target.value)}
-                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
-                  >
-                    {RACE_DISTANCES.map((item) => (
-                      <option key={item.key} value={item.key}>
-                        {lang === 'ru' ? item.labelRu : item.labelEn}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {raceMode === 'race' ? (
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Дата старта' : 'Race day'}</span>
-                    <input
-                      type="date"
-                      value={raceDate}
-                      onChange={(event) => setRaceDate(event.target.value)}
-                      style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
-                    />
-                  </label>
-                ) : (
-                  <>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Начать с' : 'Start on'}</span>
-                      <input
-                        type="date"
-                        value={raceStartDate}
-                        onChange={(event) => setRaceStartDate(event.target.value)}
-                        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
-                      />
-                    </label>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Недель плана' : 'Plan length'}</span>
-                      <select
-                        value={raceStartWeeks}
-                        onChange={(event) => setRaceStartWeeks(Number(event.target.value))}
-                        style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
-                      >
-                        {[4, 6, 8, 10, 12, 16, 20, 24].map((count) => (
-                          <option key={count} value={count}>{count}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </>
-                )}
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Тренировок в неделю' : 'Sessions per week'}</span>
-                  <select
-                    value={raceDaysPerWeek}
-                    onChange={(event) => setRaceDaysPerWeek(Number(event.target.value))}
-                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
-                  >
-                    {[3, 4, 5, 6].map((count) => (
-                      <option key={count} value={count}>{count}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              {(() => {
-                // Live horizon hint, so a rejected date never surprises.
-                if (raceMode === 'start') {
-                  const end = planEndDate(raceStartDate, raceStartWeeks);
-                  return end ? (
-                    <p className="secondary-text" style={{ fontSize: '0.8rem', marginTop: '10px' }}>
-                      {lang === 'ru'
-                        ? `План завершится ориентировочно ${new Date(`${end}T12:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })} — в последнем забеге попробуете целевую дистанцию.`
-                        : `The plan wraps up around ${new Date(`${end}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} — the final run is your goal distance.`}
-                    </p>
-                  ) : null;
-                }
-                const weeks = weeksUntilRace(raceDate);
-                if (weeks) {
-                  return (
-                    <p className="secondary-text" style={{ fontSize: '0.8rem', marginTop: '10px' }}>
-                      {lang === 'ru' ? `Осталось ~${weeks} недель — план впишется в этот горизонт.` : `~${weeks} weeks out — the plan fits that horizon.`}
-                    </p>
-                  );
-                }
-                return (
-                  <p style={{ fontSize: '0.8rem', marginTop: '10px', color: '#ff9500' }}>
-                    {lang === 'ru'
-                      ? 'До этой даты меньше 4 недель — периодизации не хватит. Переключитесь на «С даты начала»: начните тренироваться сейчас, а дату выберете позже.'
-                      : 'Less than 4 weeks out — not enough time to periodize. Switch to “From a start day”: begin training now and pick a date later.'}
-                  </p>
-                );
-              })()}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '14px', flexWrap: 'wrap' }}>
-                <button
-                  onClick={() =>
-                    void generateRacePlan(
-                      raceMode === 'start'
-                        ? { distanceKey: raceDistanceKey, daysPerWeek: raceDaysPerWeek, mode: 'start', startDate: raceStartDate, startWeeks: raceStartWeeks }
-                        : { distanceKey: raceDistanceKey, daysPerWeek: raceDaysPerWeek, mode: 'race', raceDate },
-                    )
-                  }
-                  disabled={isRaceLoading}
-                  style={{
-                    background: '#5856d6',
-                    color: '#fff',
-                    border: 'none',
-                    padding: '11px 18px',
-                    borderRadius: '12px',
-                    cursor: isRaceLoading ? 'not-allowed' : 'pointer',
-                    fontWeight: 600,
-                    opacity: isRaceLoading ? 0.6 : 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                  }}
-                >
-                  {isRaceLoading && <Loader2 size={15} className="animate-spin" />}
-                  {lang === 'ru' ? 'Сгенерировать план' : 'Generate plan'}
-                </button>
-                {racePlanSummary && (
-                  <p style={{ fontSize: '0.85rem', color: '#34c759', fontWeight: 600 }}>{racePlanSummary}</p>
-                )}
-                {raceError && (
-                  <p style={{ fontSize: '0.85rem', color: '#ff9500' }}>{raceError}</p>
-                )}
-              </div>
-            </div>
-
-            {trainingPlans.length === 0 ? (
-              <div className="premium-card" style={{ textAlign: 'center', padding: '48px 32px' }}>
-                <CalendarCheck size={40} style={{ marginBottom: '12px' }} />
-                <p style={{ marginBottom: '16px' }}>{t.noPlans}</p>
-                <button
-                  onClick={() => setActiveTab('next-workout')}
-                  style={{ background: '#5856d6', color: '#fff', border: 'none', padding: '12px 18px', borderRadius: '12px', cursor: 'pointer', fontWeight: 600 }}
-                >
-                  {t.nextWorkout}
-                </button>
-              </div>
-            ) : (
-              trainingPlans.map((plan) => (
-                <div key={plan.id} className="premium-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', marginBottom: '16px' }}>
-                    <div>
-                      <h3 style={{ marginBottom: '6px' }}>{plan.goal}</h3>
-                      <p className="secondary-text">
-                        {new Date(plan.startDate).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US')} · {plan.status}
-                      </p>
-                      {plan.notes && (
-                        <p
-                          style={{
-                            marginTop: '8px',
-                            fontSize: '0.82rem',
-                            fontStyle: 'italic',
-                            color: 'rgba(255,255,255,0.55)',
-                            maxWidth: '560px',
-                            lineHeight: 1.5,
-                          }}
-                        >
-                          {plan.notes}
-                        </p>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      {plan.status === 'active' && (
-                        <button
-                          onClick={() => void setPlanStatus(plan.id, 'completed')}
-                          style={{ background: 'rgba(52, 199, 89, 0.12)', color: '#34c759', border: '1px solid rgba(52, 199, 89, 0.25)', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600 }}
-                        >
-                          {t.markCompleted}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => void explainPlan(plan)}
-                        disabled={explainingPlanId !== null}
-                        style={{
-                          background: 'rgba(88, 86, 214, 0.12)',
-                          color: '#a5a3ff',
-                          border: '1px solid rgba(88, 86, 214, 0.25)',
-                          padding: '8px 12px',
-                          borderRadius: '8px',
-                          cursor: explainingPlanId !== null ? 'not-allowed' : 'pointer',
-                          fontWeight: 600,
-                          opacity: explainingPlanId !== null && explainingPlanId !== plan.id ? 0.5 : 1,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                        }}
-                      >
-                        {explainingPlanId === plan.id && <Loader2 size={14} className="animate-spin" />}
-                        {t.explainPlan}
-                      </button>
-                      <button
-                        onClick={() => void removeTrainingPlan(plan.id)}
-                        aria-label={t.deletePlan}
-                        style={{ background: 'rgba(255, 45, 85, 0.12)', color: '#ff2d55', border: '1px solid rgba(255, 45, 85, 0.25)', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                  {(() => {
-                    const renderSessionRow = (session: TrainingSession, key: string) => (
-                      <div key={key} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.6fr 1.4fr', gap: '12px', padding: '12px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
-                        <span style={{ fontWeight: 600 }}>
-                          {session.day && session.type ? `${session.day} · ${session.type}` : (session.phase ?? session.type ?? '—')}
-                        </span>
-                        <span className="secondary-text">
-                          {session.distance && session.duration
-                            ? `${session.distance} · ${session.duration}`
-                            : (session.duration ?? session.distance ?? '—')}
-                        </span>
-                        <span className="secondary-text">{session.zone ?? '—'}</span>
-                        <span className="secondary-text">{session.notes ?? session.pace ?? '—'}</span>
-                      </div>
-                    );
-                    // Race plans carry week numbers and render grouped by week;
-                    // legacy one-week plans keep the flat rows.
-                    if (!plan.sessions.some((session) => typeof session.week === 'number')) {
-                      return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                          {plan.sessions.map((session, index) => renderSessionRow(session, `${plan.id}-${index}`))}
-                        </div>
-                      );
-                    }
-                    return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        {groupSessionsByWeek(plan.sessions).map((weekGroup) => (
-                          <div key={`${plan.id}-w${weekGroup.week}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <p style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a5a3ff', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                              {lang === 'ru' ? `Неделя ${weekGroup.week}` : `Week ${weekGroup.week}`}
-                              {weekGroup.phase ? ` · ${weekGroup.phase}` : ''}
-                            </p>
-                            {weekGroup.sessions.map((session, index) => renderSessionRow(session, `${plan.id}-w${weekGroup.week}-${index}`))}
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                  {plan.id in planExplanations && (
-                    <div
-                      className="animate-fade-in"
-                      style={{ marginTop: '14px', padding: '14px 16px', borderRadius: '12px', background: 'rgba(88, 86, 214, 0.06)', border: '1px solid rgba(88, 86, 214, 0.18)', whiteSpace: 'pre-line', lineHeight: 1.6 }}
-                    >
-                      {planExplanations[plan.id] || t.aiThinking}
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        )}
 
         {activeTab === 'health' && (
           <div className="animate-fade-in no-print" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -4067,25 +3734,9 @@ export default function Home() {
                         </div>
                       );
                     })}
-                    <button
-                      onClick={() => {
-                        const goalLabels: Record<string, string> = { fat_loss: 'Fat Loss', endurance: 'Endurance', speed: 'Speed' };
-                        const timezone = new Date().toISOString().slice(0, 10);
-                        void persistTrainingPlan(`${goalLabels[trainingGoal ?? ''] ?? 'Plan'} · ${timezone}`, planPhases).then(() => {
-                          setPlanNotice(t.planSaved);
-                          window.setTimeout(() => setPlanNotice(null), 4000);
-                        });
-                      }}
-                      style={{ marginTop: '4px', background: 'rgba(52, 199, 89, 0.12)', color: '#34c759', border: '1px solid rgba(52, 199, 89, 0.24)', padding: '10px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                      {t.savePlan}
-                    </button>
                   </div>
                 )}
 
-                {planNotice && (
-                  <p className="secondary-text" style={{ marginTop: '12px', color: '#34c759' }}>{planNotice}</p>
-                )}
 
                 {aiPlan && planPhases.length === 0 && (
                   <div className="animate-fade-in" style={{ padding: '16px', background: 'rgba(52, 199, 89, 0.05)', borderRadius: '12px', border: '1px solid rgba(52, 199, 89, 0.1)', whiteSpace: 'pre-line', marginTop: '16px' }}>
@@ -4134,29 +3785,6 @@ export default function Home() {
                         );
                       })}
                     </div>
-                    <button
-                      onClick={() => {
-                        const goalLabels: Record<string, string> = { fat_loss: 'Fat Loss', endurance: 'Endurance', speed: 'Speed' };
-                        const phases = weekSessions.map((day) => ({
-                          phase: `${day.weekdayShort} ${day.dateLabel} · ${day.session}`,
-                          duration: day.duration,
-                          zone: day.zone === '-' ? 'Z1' : day.zone,
-                          hr_range: day.zone === '-' ? '—' : day.zone,
-                          pace: day.distance,
-                          notes: day.notes,
-                        }));
-                        void persistTrainingPlan(
-                          `${goalLabels[trainingGoal ?? ''] ?? 'Plan'} · ${weekSessions[0].key} → ${weekSessions[6].key}`,
-                          phases,
-                        ).then(() => {
-                          setPlanNotice(t.planSaved);
-                          window.setTimeout(() => setPlanNotice(null), 4000);
-                        });
-                      }}
-                      style={{ marginTop: '14px', width: '100%', background: 'rgba(0, 122, 255, 0.12)', color: '#007aff', border: '1px solid rgba(0, 122, 255, 0.24)', padding: '10px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                      {lang === 'ru' ? 'Сохранить неделю' : 'Save week'}
-                    </button>
                   </div>
                 )}
 

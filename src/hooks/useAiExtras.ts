@@ -6,7 +6,7 @@ import { HealthFlag, UserPreferences, defaultPreferences } from '@/lib/ai';
 import { Language } from '@/lib/translations';
 import { WorkoutData } from '@/lib/parser';
 import { WorkoutSplit, formatSplitPace } from '@/lib/splits';
-import type { BodyMetric, TrainingPlan } from '@/lib/actions';
+import type { BodyMetric } from '@/lib/actions';
 
 type WeekSummary = {
   distance: number;
@@ -75,8 +75,6 @@ export function useAiExtras(params: UseAiExtrasParams) {
   const [readiness, setReadiness] = useState('');
   const [isReadinessLoading, setIsReadinessLoading] = useState(false);
 
-  const [planExplanations, setPlanExplanations] = useState<Record<string, string>>({});
-  const [explainingPlanId, setExplainingPlanId] = useState<string | null>(null);
 
   const [splitsAnalysis, setSplitsAnalysis] = useState('');
   const [isSplitsLoading, setIsSplitsLoading] = useState(false);
@@ -199,36 +197,6 @@ export function useAiExtras(params: UseAiExtrasParams) {
     }
   };
 
-  const explainPlan = async (plan: TrainingPlan) => {
-    if (explainingPlanId) return;
-    setExplainingPlanId(plan.id);
-    setPlanExplanations((prev) => ({ ...prev, [plan.id]: '' }));
-    try {
-      const sessionsText = plan.sessions
-        .map(
-          (session, index) =>
-            `${index + 1}. ${session.phase ?? session.type ?? 'Session'} — ${session.duration ?? '?'}, zone ${session.zone ?? '?'}, pace ${session.pace ?? '?'}. ${session.notes ?? ''}`,
-        )
-        .join('\n');
-      await streamOllama(
-        {
-          system: `You are a running coach explaining a training plan to a beginner. Answer in ${languageName}. Walk through each session: its purpose, why it is placed there, and one common mistake to avoid. End with one line of overall advice. Plain text, no markdown, 150-200 words.`,
-          prompt: `Plan goal: ${plan.goal}\nSessions:\n${sessionsText}\n\nExplain the plan.\n${closingLanguageLine}`,
-        },
-        (text) => setPlanExplanations((prev) => ({ ...prev, [plan.id]: text })),
-        { cache: true },
-      );
-    } catch (err) {
-      console.error('[RunForm] explainPlan failed:', err);
-      setPlanExplanations((prev) => ({
-        ...prev,
-        [plan.id]: lang === 'ru' ? '❌ Ollama не отвечает.' : '❌ Ollama is not responding.',
-      }));
-    } finally {
-      setExplainingPlanId(null);
-    }
-  };
-
   const analyzeSplits = async (splits: WorkoutSplit[], workout: WorkoutData | null) => {
     if (splits.length === 0 || isSplitsLoading) return;
     setIsSplitsLoading(true);
@@ -294,9 +262,6 @@ export function useAiExtras(params: UseAiExtrasParams) {
     readiness,
     isReadinessLoading,
     assessReadiness,
-    planExplanations,
-    explainingPlanId,
-    explainPlan,
     splitsAnalysis,
     isSplitsLoading,
     analyzeSplits,

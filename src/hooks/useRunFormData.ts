@@ -5,35 +5,28 @@ import {
   addShoe,
   assignShoeToWorkout,
   backfillPersonalBests,
-  deleteTrainingPlan,
   getBodyMetrics,
   getPersonalBests,
   getRoutes,
   getShoes,
-  getTrainingPlans,
   renameRoute,
   saveBodyMetric,
-  saveTrainingPlan,
   updateWorkoutTags,
-  updateTrainingPlanStatus,
   type BodyMetric,
   type PersonalBest,
   type Route,
   type Shoe,
-  type TrainingPlan,
-  type TrainingSession,
 } from '@/lib/actions';
 
 /**
  * Owns the data that lives outside the workout history: personal bests,
- * training plans, body metrics, equipment and routes.
+ * body metrics, equipment and routes.
  *
  * Keeping it separate from useWorkoutData keeps the dashboard hook focused on
  * workouts while still giving every screen a single refresh entry point.
  */
 export function useRunFormData() {
   const [personalBests, setPersonalBests] = useState<PersonalBest[]>([]);
-  const [trainingPlans, setTrainingPlans] = useState<TrainingPlan[]>([]);
   const [bodyMetrics, setBodyMetrics] = useState<BodyMetric[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [shoes, setShoes] = useState<Shoe[]>([]);
@@ -43,15 +36,13 @@ export function useRunFormData() {
   const loadAll = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [bests, plans, metrics, routeList, shoeList] = await Promise.all([
+      const [bests, metrics, routeList, shoeList] = await Promise.all([
         getPersonalBests(),
-        getTrainingPlans(),
         getBodyMetrics(),
         getRoutes(),
         getShoes(),
       ]);
       setPersonalBests(bests);
-      setTrainingPlans(plans);
       setBodyMetrics(metrics);
       setRoutes(routeList);
       setShoes(shoeList);
@@ -72,31 +63,6 @@ export function useRunFormData() {
     await backfillPersonalBests();
     await loadAll();
   }, [loadAll]);
-
-  const persistTrainingPlan = useCallback(
-    async (goal: string, sessions: TrainingSession[], notes?: string) => {
-      const result = await saveTrainingPlan(goal, sessions, notes);
-      await loadAll();
-      return result;
-    },
-    [loadAll],
-  );
-
-  const setPlanStatus = useCallback(
-    async (planId: string, status: 'active' | 'completed' | 'cancelled') => {
-      await updateTrainingPlanStatus(planId, status);
-      await loadAll();
-    },
-    [loadAll],
-  );
-
-  const removeTrainingPlan = useCallback(
-    async (planId: string) => {
-      await deleteTrainingPlan(planId);
-      await loadAll();
-    },
-    [loadAll],
-  );
 
   const persistBodyMetric = useCallback(
     async (metric: Omit<BodyMetric, 'id'>) => {
@@ -140,7 +106,6 @@ export function useRunFormData() {
 
   return {
     personalBests,
-    trainingPlans,
     bodyMetrics,
     routes,
     shoes,
@@ -148,9 +113,6 @@ export function useRunFormData() {
     error,
     loadAll,
     rebuildPersonalBests,
-    persistTrainingPlan,
-    setPlanStatus,
-    removeTrainingPlan,
     persistBodyMetric,
     setRouteName,
     createShoe,
