@@ -364,7 +364,10 @@ npm run build
 
 ## Changelog
 
-### v0.14.0 (Latest)
+### v0.14.1 (Latest)
+- **Race-plan overview fix**: qwen3 spends ~1000 hidden reasoning tokens before any visible answer, so the overview request's tight 400-token cap cut it off mid-think and saved an empty comment. The cap now covers thinking plus answer, with `/no_think` in the prompt.
+
+### v0.14.0
 - **Race plans rebuilt around a deterministic template**: benchmarks on the target machine (8 GB, qwen3:4b at ~20 tok/s) showed a local model drowns in un-suppressible reasoning tokens on any multi-session schedule and never finishes inside a sane timeout. The week-by-week skeleton is now built locally — fixed microcycle per session count (3–6 runs/week), long run growing ~10%/week to its peak, two-week taper, the race itself as the final Sunday session — instantly and fully testable (14 checks). The local model is asked only for a short coach-voice overview of the plan, saved with it and shown on the card; a slow or offline model costs the plan nothing.
 - **Plan overviews persist**: `training_plans` gained a `notes` column (migration v11) that stores the model's overview.
 

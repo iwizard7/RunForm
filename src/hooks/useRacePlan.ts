@@ -75,9 +75,12 @@ export function useRacePlan({ lang, history, persistTrainingPlan }: UseRacePlanP
           `${lang === 'ru' ? 'Russian' : 'English'}. Plain text only, no markdown, no lists.`;
         const prompt =
           `${distance.labelEn} race on ${raceDate}, ${weeks}-week plan, ${daysPerWeek} runs per week, ` +
-          `runner currently ~${weeklyKm} km/week. Overview:`;
+          `runner currently ~${weeklyKm} km/week. /no_think Overview:`;
         const data = await requestOllama(
-          { prompt, system: systemPrompt, options: { num_ctx: 2048, num_predict: 400 } },
+          // qwen3 burns ~1000 hidden reasoning tokens before any visible
+          // answer; a tight num_predict cuts it off mid-think and yields an
+          // empty response, so the cap has to cover thinking plus answer.
+          { prompt, system: systemPrompt, options: { num_ctx: 2048, num_predict: 2500 } },
           { timeoutMs: OVERVIEW_TIMEOUT_MS },
         );
         overview = (data.response ?? '').replace(/\s+/g, ' ').trim().replace(/^["'“”]+|["'“”]+$/g, '').slice(0, 600);
