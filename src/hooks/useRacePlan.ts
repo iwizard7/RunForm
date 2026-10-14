@@ -130,9 +130,11 @@ export function useRacePlan({ lang, history, persistTrainingPlan }: UseRacePlanP
           `${horizon}, ${daysPerWeek} runs per week, runner currently ~${weeklyKm} km/week. /no_think Overview:`;
         const data = await requestOllama(
           // qwen3 burns ~1000 hidden reasoning tokens before any visible
-          // answer; a tight num_predict cuts it off mid-think and yields an
-          // empty response, so the cap has to cover thinking plus answer.
-          { prompt, system: systemPrompt, options: { num_ctx: 2048, num_predict: 2500 } },
+          // answer. num_predict must cover thinking plus answer, and num_ctx
+          // must cover prompt plus the full prediction — with a 2048 context
+          // a long-thinking run hit the wall before emitting a single visible
+          // token and the overview came back empty.
+          { prompt, system: systemPrompt, options: { num_ctx: 4096, num_predict: 2500 } },
           { timeoutMs: OVERVIEW_TIMEOUT_MS },
         );
         overview = (data.response ?? '').replace(/\s+/g, ' ').trim().replace(/^["'“”]+|["'“”]+$/g, '').slice(0, 600);
