@@ -182,6 +182,12 @@ export function useWorkoutData() {
     await refreshData();
   };
 
+  const updateNote = async (workoutId: string, note: string) => {
+    const { updateWorkoutNote } = await import('@/lib/actions');
+    await updateWorkoutNote(workoutId, note);
+    await refreshData();
+  };
+
   const resetWorkouts = async () => {
     await clearAllWorkouts();
     setSelectedDateKey(null);
@@ -272,6 +278,7 @@ export function useWorkoutData() {
     importWorkoutFromScreenshot,
     assignShoe,
     updateTags,
+    updateNote,
     resetWorkouts,
   };
 }

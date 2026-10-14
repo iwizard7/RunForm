@@ -51,6 +51,7 @@ interface WorkoutRow {
   tags_json?: string;
   route_json?: string;
   route_id?: string;
+  notes?: string;
 }
 
 export interface Shoe {
@@ -134,6 +135,7 @@ function mapRowToWorkout(row: Partial<WorkoutRow> & Pick<WorkoutRow, 'uuid' | 'n
     tags: parseJsonValue(row.tags_json, [] as string[]),
     route: parseJsonValue(row.route_json, [] as NonNullable<WorkoutData['route']>),
     routeId: row.route_id,
+    notes: row.notes ?? null,
   };
 }
 
@@ -370,6 +372,16 @@ export async function updateWorkoutTags(workoutId: string, tags: string[]) {
   return { success: true };
 }
 
+/**
+ * Saves the free-text post-run note. An empty string clears the note. The
+ * column is deliberately outside the import path, so re-importing a workout
+ * never clobbers what the athlete wrote afterwards.
+ */
+export async function updateWorkoutNote(workoutId: string, note: string) {
+  db.prepare('UPDATE workouts SET notes = ? WHERE uuid = ?').run(note.trim() ? note.trim() : null, workoutId);
+  return { success: true };
+}
+
 // === Personal Bests ===
 
 export interface PersonalBest {
@@ -553,6 +565,10 @@ export interface TrainingSession {
   hr_range?: string;
   pace?: string;
   notes?: string;
+  /** Multi-week race plans: week number and target distance. */
+  week?: number;
+  distance?: string;
+  intensity?: string;
 }
 
 export interface TrainingPlan {

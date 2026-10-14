@@ -364,7 +364,11 @@ npm run build
 
 ## Changelog
 
-### v0.12.0 (Latest)
+### v0.13.0 (Latest)
+- **Race plans**: a periodized plan from today to a target race — pick the distance (5 km / 10 km / half / marathon), the race day and how often you run per week; the local model fills in a week-by-week schedule with phases (base → build → peak → taper), and the Plans tab renders it grouped by week. Dates, week counts and validation are pinned locally; the model self-corrects against a strict validator before anything is saved.
+- **Post-run notes with voice dictation**: every workout in the History tab now takes a free-text note — type it or dictate it with the Web Speech API right after the run. Notes survive re-imports (they live outside the import path) and render inline on the workout card.
+
+### v0.12.0
 - **Route segments**: mark any slice of a recognized course (e.g. the finishing straight) as a segment and get local Strava-style tracking — personal bests, full attempt history with rank, time and pace, and automatic scoring of every run on the route, including future imports. Segments are defined by picking start/finish anchors ~50 m apart from the route's GPS track right in the Routes tab; database tables `segments` and `segment_efforts` with migration v9.
 
 ### v0.11.1

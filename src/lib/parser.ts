@@ -47,6 +47,8 @@ export interface WorkoutData {
   tags?: string[];
   route?: RoutePoint[];
   routeId?: string;
+  /** Free-text post-run note (typed or dictated); not touched by re-imports. */
+  notes?: string | null;
 }
 
 interface WorkoutMetric<T> {

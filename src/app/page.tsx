@@ -80,8 +80,10 @@ import type { BackupEntry, DatabaseInfo } from '@/lib/backup';
 // Route segments: server actions are the same static imports the data hooks
 // use; the math helpers are pure and safe for the client bundle.
 import { createSegment, deleteSegment, getSegmentEfforts, getSegmentsForRoute } from '@/lib/actions';
-import type { SegmentEffortEntry, SegmentSummary } from '@/lib/actions';
+import type { SegmentEffortEntry, SegmentSummary, TrainingSession } from '@/lib/actions';
 import { formatEffortPace, formatEffortTime, haversineKm } from '@/lib/segments';
+import { useRacePlan } from '@/hooks/useRacePlan';
+import { RACE_DISTANCES, groupSessionsByWeek } from '@/lib/race-plan';
 import { useWorkoutData } from '@/hooks/useWorkoutData';
 import { useRunFormData } from '@/hooks/useRunFormData';
 import { useAiCoach } from '@/hooks/useAiCoach';
@@ -145,6 +147,7 @@ export default function Home() {
     setPreferences,
     assignShoe,
     updateTags,
+    updateNote,
     importWorkoutFile,
     importWorkoutFromScreenshot,
     resetWorkouts,
@@ -186,6 +189,21 @@ export default function Home() {
   const [segmentStartIdx, setSegmentStartIdx] = useState<number | null>(null);
   const [segmentEndIdx, setSegmentEndIdx] = useState<number | null>(null);
   const [segmentNotice, setSegmentNotice] = useState<string | null>(null);
+  // Race plan generator (plans tab): the race day and weekly frequency are
+  // runner input; dates and week counts are pinned locally before the model
+  // is asked to fill the sessions in.
+  const [raceDistanceKey, setRaceDistanceKey] = useState('half');
+  const [raceDate, setRaceDate] = useState(() => {
+    const defaultDate = new Date();
+    defaultDate.setDate(defaultDate.getDate() + 84);
+    return defaultDate.toISOString().slice(0, 10);
+  });
+  const [raceDaysPerWeek, setRaceDaysPerWeek] = useState(4);
+  // Post-run notes (history tab): inline editor with optional dictation.
+  const [noteEditorUuid, setNoteEditorUuid] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteDictating, setNoteDictating] = useState(false);
+  const noteRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const [planNotice, setPlanNotice] = useState<string | null>(null);
   const [dbInfo, setDbInfo] = useState<DatabaseInfo | null>(null);
   const [backupList, setBackupList] = useState<BackupEntry[]>([]);
@@ -500,6 +518,40 @@ export default function Home() {
     segmentEndIdx === null ||
     segmentStartIdx >= segmentEndIdx;
 
+  // Voice dictation for post-run notes: the same Web Speech API path as the
+  // training diary, but appending into the note draft of one workout.
+  const toggleNoteDictation = () => {
+    if (noteDictating) {
+      noteRecognitionRef.current?.stop();
+      setNoteDictating(false);
+      return;
+    }
+    const recognition = createSpeechRecognition();
+    if (!recognition) {
+      setNoteDictating(false);
+      return;
+    }
+    let finalText = '';
+    recognition.lang = lang === 'ru' ? 'ru-RU' : 'en-US';
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onresult = (event) => {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        finalText += event.results[index][0].transcript;
+      }
+    };
+    recognition.onend = () => {
+      setNoteDictating(false);
+      if (finalText.trim()) {
+        setNoteDraft((previous) => (previous ? `${previous} ${finalText.trim()}` : finalText.trim()));
+      }
+    };
+    recognition.onerror = () => setNoteDictating(false);
+    noteRecognitionRef.current = recognition;
+    recognition.start();
+    setNoteDictating(true);
+  };
+
   const {
     aiResponse,
     isAiLoading,
@@ -529,6 +581,15 @@ export default function Home() {
     currentWarmup,
     currentZoneProfile,
     preferences,
+  });
+
+  // Race plan generator: fills multi-week plans toward a target race day and
+  // saves them next to the one-week plans.
+  const { generateRacePlan, isRaceLoading, raceError, racePlanSummary } = useRacePlan({
+    lang,
+    history,
+    preferences,
+    persistTrainingPlan,
   });
 
   const {
@@ -1281,6 +1342,108 @@ export default function Home() {
                                </span>
                              ))}
                            </div>
+                           {noteEditorUuid === w.uuid ? (
+                             <div
+                               onClick={(event) => event.stopPropagation()}
+                               style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}
+                             >
+                               <textarea
+                                 value={noteDraft}
+                                 onChange={(event) => setNoteDraft(event.target.value)}
+                                 rows={2}
+                                 placeholder={lang === 'ru' ? 'Впечатления после забега — текстом или диктовкой…' : 'Post-run thoughts — typed or dictated…'}
+                                 style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', color: 'inherit', padding: '10px 12px', borderRadius: '10px', fontSize: '0.85rem', resize: 'vertical', fontFamily: 'inherit' }}
+                               />
+                               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                 <button
+                                   onClick={toggleNoteDictation}
+                                   style={{
+                                     background: noteDictating ? 'rgba(255,59,48,0.18)' : 'rgba(255,255,255,0.06)',
+                                     color: noteDictating ? '#ff3b30' : 'inherit',
+                                     border: `1px solid ${noteDictating ? 'rgba(255,59,48,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                                     padding: '8px 12px',
+                                     borderRadius: '9px',
+                                     cursor: 'pointer',
+                                     fontWeight: 600,
+                                     fontSize: '0.8rem',
+                                     display: 'flex',
+                                     alignItems: 'center',
+                                     gap: '6px',
+                                   }}
+                                 >
+                                   <Mic size={13} />
+                                   {noteDictating ? (lang === 'ru' ? 'Слушаю…' : 'Listening…') : (lang === 'ru' ? 'Диктовать' : 'Dictate')}
+                                 </button>
+                                 <button
+                                   onClick={() => {
+                                     void updateNote(w.uuid, noteDraft);
+                                     setNoteEditorUuid(null);
+                                   }}
+                                   style={{ background: '#007aff', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '9px', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                                 >
+                                   {t.save}
+                                 </button>
+                                 <button
+                                   onClick={() => {
+                                     if (noteDictating) noteRecognitionRef.current?.stop();
+                                     setNoteDictating(false);
+                                     setNoteEditorUuid(null);
+                                   }}
+                                   style={{ background: 'rgba(255,255,255,0.06)', color: 'inherit', border: '1px solid rgba(255,255,255,0.1)', padding: '8px 14px', borderRadius: '9px', cursor: 'pointer', fontSize: '0.8rem' }}
+                                 >
+                                   {t.cancel}
+                                 </button>
+                               </div>
+                             </div>
+                           ) : (
+                             <div
+                               onClick={(event) => event.stopPropagation()}
+                               style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}
+                             >
+                               {w.notes ? (
+                                 <>
+                                   <p
+                                     style={{
+                                       flex: 1,
+                                       minWidth: 0,
+                                       fontSize: '0.78rem',
+                                       fontStyle: 'italic',
+                                       color: 'rgba(255,255,255,0.55)',
+                                       overflow: 'hidden',
+                                       textOverflow: 'ellipsis',
+                                       display: '-webkit-box',
+                                       WebkitLineClamp: 2,
+                                       WebkitBoxOrient: 'vertical',
+                                       lineHeight: 1.4,
+                                     }}
+                                   >
+                                     “{w.notes}”
+                                   </p>
+                                   <button
+                                     aria-label={lang === 'ru' ? 'Редактировать заметку' : 'Edit note'}
+                                     onClick={() => {
+                                       setNoteEditorUuid(w.uuid);
+                                       setNoteDraft(w.notes ?? '');
+                                     }}
+                                     style={{ background: 'rgba(255,255,255,0.06)', color: 'inherit', border: '1px solid rgba(255,255,255,0.1)', padding: '6px 8px', borderRadius: '8px', cursor: 'pointer', display: 'flex', flexShrink: 0 }}
+                                   >
+                                     <Pencil size={13} />
+                                   </button>
+                                 </>
+                               ) : (
+                                 <button
+                                   onClick={() => {
+                                     setNoteEditorUuid(w.uuid);
+                                     setNoteDraft('');
+                                   }}
+                                   style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                                 >
+                                   <Mic size={12} />
+                                   {lang === 'ru' ? 'Заметка или диктовка после забега' : 'Post-run note or dictation'}
+                                 </button>
+                               )}
+                             </div>
+                           )}
                         </div>
                         <div style={{ textAlign: 'right' }}>
                            <h3 style={{ fontSize: '1.1rem' }}>{w.distance.toFixed(2)} km</h3>
@@ -3023,6 +3186,85 @@ export default function Home() {
               </p>
             </div>
 
+            <div className="premium-card">
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '14px' }}>
+                <Sparkles size={18} style={{ color: '#a5a3ff', marginTop: '2px' }} />
+                <div>
+                  <h3 style={{ fontSize: '1.05rem' }}>{lang === 'ru' ? 'План под старт' : 'Race plan'}</h3>
+                  <p className="secondary-text" style={{ fontSize: '0.82rem', marginTop: '4px' }}>
+                    {lang === 'ru'
+                      ? 'Периодизированный план от сегодня до целевого старта: фазы, длинные забеги, тейпер. Приложение считает даты и объём, модель заполняет занятия.'
+                      : 'A periodized plan from today to your target race: phases, long runs, taper. The app pins dates and volume, the model fills in the sessions.'}
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Дистанция' : 'Distance'}</span>
+                  <select
+                    value={raceDistanceKey}
+                    onChange={(event) => setRaceDistanceKey(event.target.value)}
+                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                  >
+                    {RACE_DISTANCES.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {lang === 'ru' ? item.labelRu : item.labelEn}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Дата старта' : 'Race day'}</span>
+                  <input
+                    type="date"
+                    value={raceDate}
+                    onChange={(event) => setRaceDate(event.target.value)}
+                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span className="secondary-text" style={{ fontSize: '0.8rem' }}>{lang === 'ru' ? 'Тренировок в неделю' : 'Sessions per week'}</span>
+                  <select
+                    value={raceDaysPerWeek}
+                    onChange={(event) => setRaceDaysPerWeek(Number(event.target.value))}
+                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'inherit', padding: '10px 12px', borderRadius: '10px' }}
+                  >
+                    {[3, 4, 5, 6].map((count) => (
+                      <option key={count} value={count}>{count}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '14px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => void generateRacePlan({ distanceKey: raceDistanceKey, raceDate, daysPerWeek: raceDaysPerWeek })}
+                  disabled={isRaceLoading}
+                  style={{
+                    background: '#5856d6',
+                    color: '#fff',
+                    border: 'none',
+                    padding: '11px 18px',
+                    borderRadius: '12px',
+                    cursor: isRaceLoading ? 'not-allowed' : 'pointer',
+                    fontWeight: 600,
+                    opacity: isRaceLoading ? 0.6 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  {isRaceLoading && <Loader2 size={15} className="animate-spin" />}
+                  {lang === 'ru' ? 'Сгенерировать план' : 'Generate plan'}
+                </button>
+                {racePlanSummary && (
+                  <p style={{ fontSize: '0.85rem', color: '#34c759', fontWeight: 600 }}>{racePlanSummary}</p>
+                )}
+                {raceError && (
+                  <p style={{ fontSize: '0.85rem', color: '#ff9500' }}>{raceError}</p>
+                )}
+              </div>
+            </div>
+
             {trainingPlans.length === 0 ? (
               <div className="premium-card" style={{ textAlign: 'center', padding: '48px 32px' }}>
                 <CalendarCheck size={40} style={{ marginBottom: '12px' }} />
@@ -3082,16 +3324,44 @@ export default function Home() {
                       </button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {plan.sessions.map((session, index) => (
-                      <div key={`${plan.id}-${index}`} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.6fr 1.4fr', gap: '12px', padding: '12px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
-                        <span style={{ fontWeight: 600 }}>{session.phase ?? session.type ?? '—'}</span>
-                        <span className="secondary-text">{session.duration ?? '—'}</span>
+                  {(() => {
+                    const renderSessionRow = (session: TrainingSession, key: string) => (
+                      <div key={key} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 0.6fr 1.4fr', gap: '12px', padding: '12px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
+                        <span style={{ fontWeight: 600 }}>
+                          {session.day && session.type ? `${session.day} · ${session.type}` : (session.phase ?? session.type ?? '—')}
+                        </span>
+                        <span className="secondary-text">
+                          {session.distance && session.duration
+                            ? `${session.distance} · ${session.duration}`
+                            : (session.duration ?? session.distance ?? '—')}
+                        </span>
                         <span className="secondary-text">{session.zone ?? '—'}</span>
                         <span className="secondary-text">{session.notes ?? session.pace ?? '—'}</span>
                       </div>
-                    ))}
-                  </div>
+                    );
+                    // Race plans carry week numbers and render grouped by week;
+                    // legacy one-week plans keep the flat rows.
+                    if (!plan.sessions.some((session) => typeof session.week === 'number')) {
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          {plan.sessions.map((session, index) => renderSessionRow(session, `${plan.id}-${index}`))}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {groupSessionsByWeek(plan.sessions).map((weekGroup) => (
+                          <div key={`${plan.id}-w${weekGroup.week}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <p style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a5a3ff', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                              {lang === 'ru' ? `Неделя ${weekGroup.week}` : `Week ${weekGroup.week}`}
+                              {weekGroup.phase ? ` · ${weekGroup.phase}` : ''}
+                            </p>
+                            {weekGroup.sessions.map((session, index) => renderSessionRow(session, `${plan.id}-w${weekGroup.week}-${index}`))}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   {plan.id in planExplanations && (
                     <div
                       className="animate-fade-in"

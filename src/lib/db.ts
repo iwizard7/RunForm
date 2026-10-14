@@ -286,4 +286,11 @@ applyMigration(9, () => {
   db.exec('CREATE INDEX IF NOT EXISTS idx_segment_efforts ON segment_efforts(segment_id, seconds)');
 });
 
+applyMigration(10, () => {
+  // Free-text post-run notes: typed or dictated right after a workout. Notes
+  // are deliberately not part of the import path — re-importing a workout
+  // never overwrites what the athlete wrote.
+  db.exec('ALTER TABLE workouts ADD COLUMN notes TEXT');
+});
+
 export default db;

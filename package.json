@@ -1,6 +1,6 @@
 {
   "name": "workout-app",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "engines": {
     "node": ">=20"
@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:logic": "tsc -p tsconfig.test.json && TEST_NODE=$(node test/resolve-node.mjs) && export NEXT_PUBLIC_APP_VERSION=$(node -p \"require('./package.json').version\") && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/parser.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/personal-best.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/training-load.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/app-version.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs test/db-entry.cjs"
+    "test:logic": "tsc -p tsconfig.test.json && TEST_NODE=$(node test/resolve-node.mjs) && export NEXT_PUBLIC_APP_VERSION=$(node -p \"require('./package.json').version\") && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/parser.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/personal-best.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/training-load.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/race-plan.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs .test-build/test/app-version.test.js && \"$TEST_NODE\" --require ./test/alias-hook.cjs test/db-entry.cjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",

@@ -27,6 +27,7 @@ import {
   getShoes,
   matchAndAssignRoute,
   saveWorkout,
+  updateWorkoutNote,
   updateWorkoutTags,
 } from '@/lib/actions';
 import { parseWorkoutJSON } from '@/lib/parser';
@@ -396,6 +397,41 @@ export async function runDatabaseSuite(): Promise<void> {
     const rebuilt = await ensurePersonalBests();
     assertEqual(rebuilt.rebuilt, true, 'rebuild triggered on empty table');
     assert(rebuilt.records > 0, 'records restored from history');
+  });
+
+  group('database: post-run notes');
+
+  test('notes are null until the runner writes one', async () => {
+    const all = await getAllWorkouts();
+    const target = all.find((item) => item.uuid === 'test-workout-reimport');
+    assert(target, 're-import fixture exists');
+    assertEqual(target?.notes ?? null, null, 'note starts empty');
+  });
+
+  test('updateWorkoutNote stores a trimmed note', async () => {
+    await updateWorkoutNote('test-workout-reimport', '  Legs felt strong on the hills  ');
+    const all = await getAllWorkouts();
+    const target = all.find((item) => item.uuid === 'test-workout-reimport');
+    assertEqual(target?.notes, 'Legs felt strong on the hills', 'note round-trips trimmed');
+  });
+
+  test('re-importing the workout does not clobber the note', async () => {
+    // Notes live outside the import path on purpose: what the runner wrote
+    // after the run must survive a duplicate import of the same file.
+    const result = await saveWorkout(parseWorkoutJSON({ ...baseWorkout, uuid: 'test-workout-reimport' }));
+    assertEqual(result.duplicate, true, 're-import flagged as duplicate');
+    const row = db.prepare('SELECT notes FROM workouts WHERE uuid = ?').get('test-workout-reimport') as {
+      notes: string | null;
+    };
+    assertEqual(row.notes, 'Legs felt strong on the hills', 'note survives re-import');
+  });
+
+  test('a blank note clears back to null', async () => {
+    await updateWorkoutNote('test-workout-reimport', '   ');
+    const row = db.prepare('SELECT notes FROM workouts WHERE uuid = ?').get('test-workout-reimport') as {
+      notes: string | null;
+    };
+    assertEqual(row.notes, null, 'blank note stored as NULL');
   });
 
   group('database: ai chat');
