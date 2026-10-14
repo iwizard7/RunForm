@@ -293,4 +293,10 @@ applyMigration(10, () => {
   db.exec('ALTER TABLE workouts ADD COLUMN notes TEXT');
 });
 
+applyMigration(11, () => {
+  // Short coach-written overview attached to a saved plan. Race plans get a
+  // local-model comment here; template-only plans store NULL.
+  db.exec('ALTER TABLE training_plans ADD COLUMN notes TEXT');
+});
+
 export default db;

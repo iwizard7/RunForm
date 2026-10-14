@@ -583,12 +583,11 @@ export default function Home() {
     preferences,
   });
 
-  // Race plan generator: fills multi-week plans toward a target race day and
+  // Race plan generator: builds multi-week plans toward a target race day and
   // saves them next to the one-week plans.
   const { generateRacePlan, isRaceLoading, raceError, racePlanSummary } = useRacePlan({
     lang,
     history,
-    preferences,
     persistTrainingPlan,
   });
 
@@ -3285,6 +3284,20 @@ export default function Home() {
                       <p className="secondary-text">
                         {new Date(plan.startDate).toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US')} · {plan.status}
                       </p>
+                      {plan.notes && (
+                        <p
+                          style={{
+                            marginTop: '8px',
+                            fontSize: '0.82rem',
+                            fontStyle: 'italic',
+                            color: 'rgba(255,255,255,0.55)',
+                            maxWidth: '560px',
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {plan.notes}
+                        </p>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       {plan.status === 'active' && (

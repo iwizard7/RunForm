@@ -578,6 +578,8 @@ export interface TrainingPlan {
   sessions: TrainingSession[];
   startDate: string;
   endDate?: string;
+  /** Optional coach-written overview (race plans get a local-model comment). */
+  notes?: string;
 }
 
 type TrainingPlanRow = {
@@ -587,6 +589,7 @@ type TrainingPlanRow = {
   sessions_json: string | null;
   start_date: string;
   end_date: string | null;
+  notes: string | null;
 };
 
 export async function getTrainingPlans(): Promise<TrainingPlan[]> {
@@ -598,15 +601,16 @@ export async function getTrainingPlans(): Promise<TrainingPlan[]> {
     sessions: parseJsonValue<TrainingSession[]>(row.sessions_json, []),
     startDate: row.start_date,
     endDate: row.end_date ?? undefined,
+    notes: row.notes ?? undefined,
   }));
 }
 
-export async function saveTrainingPlan(goal: string, sessions: TrainingSession[]) {
+export async function saveTrainingPlan(goal: string, sessions: TrainingSession[], notes?: string) {
   const id = crypto.randomUUID();
   db.prepare(`
-    INSERT INTO training_plans (id, goal, sessions_json)
-    VALUES (?, ?, ?)
-  `).run(id, goal, JSON.stringify(sessions));
+    INSERT INTO training_plans (id, goal, sessions_json, notes)
+    VALUES (?, ?, ?, ?)
+  `).run(id, goal, JSON.stringify(sessions), notes?.trim() || null);
   return { success: true as const, id };
 }
 

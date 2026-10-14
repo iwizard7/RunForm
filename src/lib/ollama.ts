@@ -4,6 +4,15 @@ export type OllamaRequest = {
   model?: string;
   /** Base64 images for vision models (e.g. workout screenshots). */
   images?: string[];
+  /**
+   * Generation limits; only these two keys are forwarded to Ollama, and the
+   * proxy route clamps them. Long structured outputs need a bigger context
+   * than the model's default 4096 or they stall mid-generation.
+   */
+  options?: {
+    num_ctx?: number;
+    num_predict?: number;
+  };
 };
 
 export type OllamaCallOptions = {

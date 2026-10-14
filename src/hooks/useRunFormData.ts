@@ -74,8 +74,8 @@ export function useRunFormData() {
   }, [loadAll]);
 
   const persistTrainingPlan = useCallback(
-    async (goal: string, sessions: TrainingSession[]) => {
-      const result = await saveTrainingPlan(goal, sessions);
+    async (goal: string, sessions: TrainingSession[], notes?: string) => {
+      const result = await saveTrainingPlan(goal, sessions, notes);
       await loadAll();
       return result;
     },

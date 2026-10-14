@@ -24,6 +24,27 @@ function resolveTimeout(requested: number | undefined, stream: boolean): number 
   if (typeof requested !== 'number' || Number.isNaN(requested)) return NON_STREAM_TIMEOUT_MS;
   return Math.min(STREAM_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, requested));
 }
+
+/** Caps for the whitelisted generation options a client may forward. */
+const MAX_NUM_CTX = 16_384;
+const MAX_NUM_PREDICT = 8_192;
+
+/**
+ * Only num_ctx and num_predict cross the proxy, clamped to sane bounds — a
+ * long structured answer (a multi-week plan) needs a context larger than the
+ * model's default 4096 or it stalls mid-generation.
+ */
+function resolveOptions(requested: OllamaRequestBody['options']): Record<string, number> | undefined {
+  if (!requested) return undefined;
+  const options: Record<string, number> = {};
+  if (typeof requested.num_ctx === 'number' && requested.num_ctx > 0) {
+    options.num_ctx = Math.min(MAX_NUM_CTX, Math.max(2_048, Math.round(requested.num_ctx)));
+  }
+  if (typeof requested.num_predict === 'number' && requested.num_predict > 0) {
+    options.num_predict = Math.min(MAX_NUM_PREDICT, Math.max(64, Math.round(requested.num_predict)));
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
+}
 // Keep the loaded model resident for a while so the next request does not pay
 // the 10-30 s cold-load again. Override with OLLAMA_KEEP_ALIVE (e.g. "0" to
 // unload immediately and free RAM).
@@ -39,6 +60,11 @@ type OllamaRequestBody = {
   images?: string[];
   /** Optional override of the non-stream timeout; clamped to 5..300 s. */
   timeoutMs?: number;
+  /** Whitelisted generation limits forwarded to Ollama, each clamped. */
+  options?: {
+    num_ctx?: number;
+    num_predict?: number;
+  };
 };
 
 /**
@@ -156,6 +182,10 @@ export async function POST(request: NextRequest) {
       stream,
       keep_alive: KEEP_ALIVE,
       ...(images ? { images } : {}),
+      ...(() => {
+        const options = resolveOptions(body.options);
+        return options ? { options } : {};
+      })(),
     };
 
     const upstream = await fetch(process.env.OLLAMA_URL ?? DEFAULT_OLLAMA_URL, {
