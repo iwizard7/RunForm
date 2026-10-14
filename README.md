@@ -364,7 +364,10 @@ npm run build
 
 ## Changelog
 
-### v0.13.0 (Latest)
+### v0.13.1 (Latest)
+- **Race-plan generation timeout fix**: multi-week plans exceed the Ollama proxy's default 45 s non-stream budget on small local models; the race-plan request now raises its own timeout (clamped server-side to 5 minutes).
+
+### v0.13.0
 - **Race plans**: a periodized plan from today to a target race — pick the distance (5 km / 10 km / half / marathon), the race day and how often you run per week; the local model fills in a week-by-week schedule with phases (base → build → peak → taper), and the Plans tab renders it grouped by week. Dates, week counts and validation are pinned locally; the model self-corrects against a strict validator before anything is saved.
 - **Post-run notes with voice dictation**: every workout in the History tab now takes a free-text note — type it or dictate it with the Web Speech API right after the run. Notes survive re-imports (they live outside the import path) and render inline on the workout card.
 

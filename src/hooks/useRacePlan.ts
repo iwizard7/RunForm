@@ -10,6 +10,12 @@ import { RACE_DISTANCES, validateRaceSessions, weeksUntilRace } from '@/lib/race
 
 /** Maximum generation attempts, including self-correction retries. */
 const RACE_PLAN_MAX_ATTEMPTS = 3;
+/**
+ * A full multi-week plan is a long answer for a small local model — well
+ * beyond the proxy route's 45 s non-stream default, so the request raises
+ * its own budget (the route clamps it to 300 s anyway).
+ */
+const RACE_PLAN_TIMEOUT_MS = 240_000;
 
 type UseRacePlanParams = {
   lang: Language;
@@ -110,7 +116,7 @@ export function useRacePlan({ lang, history, preferences, persistTrainingPlan }:
           attempt === 0
             ? basePrompt
             : `Your previous answer could not be used: ${lastProblem}.\nPrevious answer:\n${previousRaw}\n\nReturn ONLY the corrected JSON array (no markdown fences, no commentary), still exactly ${totalSessions} objects covering weeks 1..${weeks}:`;
-        const data = await requestOllama({ prompt, system: systemPrompt });
+        const data = await requestOllama({ prompt, system: systemPrompt }, { timeoutMs: RACE_PLAN_TIMEOUT_MS });
         raw = data.response ?? '';
 
         const jsonMatch = raw.match(/\[[\s\S]*\]/);

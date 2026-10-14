@@ -15,6 +15,12 @@ export type OllamaCallOptions = {
   cache?: boolean;
   /** Time-to-live for cached answers. Defaults to 60 minutes. */
   cacheTtlMs?: number;
+  /**
+   * Raise the proxy route's non-stream timeout for long generations (a
+   * multi-week race plan can take minutes on a small local model). Clamped
+   * server-side to 5..300 s; the default non-stream budget is 45 s.
+   */
+  timeoutMs?: number;
 };
 
 const MODEL_STORAGE_KEYS = {
@@ -141,7 +147,7 @@ export async function requestOllama(params: OllamaRequest, options?: OllamaCallO
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ ...params, model }),
+    body: JSON.stringify({ ...params, model, ...(options?.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) }),
   });
 
   if (!response.ok) {

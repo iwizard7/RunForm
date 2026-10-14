@@ -11,6 +11,19 @@ const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const NON_STREAM_TIMEOUT_MS = 45_000;
 const STREAM_TIMEOUT_MS = 300_000;
+const MIN_TIMEOUT_MS = 5_000;
+
+/**
+ * Streaming keeps the connection alive for the full 300 s budget. For
+ * non-streaming calls the default is the short 45 s budget, but long
+ * generations (multi-week race plans) may raise it per request, clamped so a
+ * client cannot pin a worker for longer than the streaming cap.
+ */
+function resolveTimeout(requested: number | undefined, stream: boolean): number {
+  if (stream) return STREAM_TIMEOUT_MS;
+  if (typeof requested !== 'number' || Number.isNaN(requested)) return NON_STREAM_TIMEOUT_MS;
+  return Math.min(STREAM_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, requested));
+}
 // Keep the loaded model resident for a while so the next request does not pay
 // the 10-30 s cold-load again. Override with OLLAMA_KEEP_ALIVE (e.g. "0" to
 // unload immediately and free RAM).
@@ -24,6 +37,8 @@ type OllamaRequestBody = {
   stream?: boolean;
   /** Base64-encoded images for vision models. */
   images?: string[];
+  /** Optional override of the non-stream timeout; clamped to 5..300 s. */
+  timeoutMs?: number;
 };
 
 /**
@@ -149,7 +164,7 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(stream ? STREAM_TIMEOUT_MS : NON_STREAM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(resolveTimeout(body.timeoutMs, stream)),
       cache: 'no-store',
     });
 
